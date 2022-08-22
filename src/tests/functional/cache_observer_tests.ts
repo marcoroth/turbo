@@ -1,18 +1,26 @@
-import { TurboDriveTestCase } from "../helpers/turbo_drive_test_case"
+import { test } from "@playwright/test"
+import { assert } from "chai"
+import { hasSelector, nextBody } from "../helpers/page"
 
-export class CacheObserverTests extends TurboDriveTestCase {
-  async setup() {
-    await this.goToLocation("/src/tests/fixtures/cache_observer.html")
-  }
+test("test removes stale elements", async ({ page }) => {
+  await page.goto("/src/tests/fixtures/cache_observer.html")
 
-  async "test removes stale elements"() {
-    this.assert(await this.hasSelector("#flash"))
-    this.clickSelector("#link")
-    await this.nextBody
-    await this.goBack()
-    await this.nextBody
-    this.assert.notOk(await this.hasSelector("#flash"))
-  }
-}
+  assert.equal(await page.textContent("#flash"), "Rendering")
 
-CacheObserverTests.registerSuite()
+  await page.click("#link")
+  await nextBody(page)
+  await page.goBack()
+  await nextBody(page)
+
+  assert.notOk(await hasSelector(page, "#flash"))
+})
+
+test("test following a redirect renders a [data-turbo-cache=false] element before the cache omits it", async ({
+  page,
+}) => {
+  await page.goto("/src/tests/fixtures/navigation.html")
+  await page.click("#redirect-to-cache-observer")
+  await nextBody(page)
+
+  assert.equal(await page.textContent("#flash"), "Rendering")
+})

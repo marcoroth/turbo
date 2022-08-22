@@ -2,15 +2,15 @@ import { Request, Response, Router } from "express"
 import multer from "multer"
 import path from "path"
 import url from "url"
-import fs from "fs";
+import fs from "fs"
 
 const router = Router()
-const streamResponses: Set<Response> = new Set
+const streamResponses: Set<Response> = new Set()
 
 router.use(multer().none())
 
 router.use((request, response, next) => {
-  if (request.accepts(["text/html", "application/xhtml+xml"])) {
+  if (request.accepts(["text/html", "application/xhtml+xml", "text/event-stream"])) {
     next()
   } else {
     response.sendStatus(422)
@@ -19,12 +19,18 @@ router.use((request, response, next) => {
 
 router.post("/redirect", (request, response) => {
   const { path, sleep, ...query } = request.body
-  const pathname = path ?? "/src/tests/fixtures/one.html"
+  const { pathname, query: searchParams } = url.parse(
+    path ?? request.query.path ?? "/src/tests/fixtures/one.html",
+    true
+  )
   const enctype = request.get("Content-Type")
   if (enctype) {
     query.enctype = enctype
   }
-  setTimeout(() => response.redirect(303, url.format({ pathname, query })), parseInt(sleep || "0", 10))
+  setTimeout(
+    () => response.redirect(303, url.format({ pathname, query: { ...query, ...searchParams } })),
+    parseInt(sleep || "0", 10)
+  )
 })
 
 router.get("/redirect", (request, response) => {
@@ -53,7 +59,10 @@ router.post("/reject", (request, response) => {
 
 router.get("/headers", (request, response) => {
   const template = fs.readFileSync("src/tests/fixtures/headers.html").toString()
-  response.type("html").status(200).send(template.replace('$HEADERS', JSON.stringify(request.headers, null, 4)))
+  response
+    .type("html")
+    .status(200)
+    .send(template.replace("$HEADERS", JSON.stringify(request.headers, null, 4)))
 })
 
 router.get("/delayed_response", (request, response) => {
@@ -77,12 +86,23 @@ router.post("/messages", (request, response) => {
   }
 })
 
+router.get("/stream-response", (request, response) => {
+  const params = { ...request.body, ...request.query }
+  const { content, target, targets } = params
+  if (acceptsStreams(request)) {
+    response.type("text/vnd.turbo-stream.html; charset=utf-8")
+    response.send(targets ? renderMessageForTargets(content, targets) : renderMessage(content, target))
+  } else {
+    response.sendStatus(422)
+  }
+})
+
 router.put("/messages/:id", (request, response) => {
   const { content, type } = request.body
   const { id } = request.params
   if (typeof content == "string") {
     receiveMessage(content)
-    if (type == "stream" &&  acceptsStreams(request)) {
+    if (type == "stream" && acceptsStreams(request)) {
       response.type("text/vnd.turbo-stream.html; charset=utf-8")
       response.send(renderMessage(id + ": " + content))
     } else {
@@ -97,7 +117,7 @@ router.get("/messages", (request, response) => {
   response.set({
     "Cache-Control": "no-cache",
     "Content-Type": "text/event-stream",
-    "Connection": "keep-alive"
+    Connection: "keep-alive",
   })
 
   response.on("close", () => {
@@ -139,7 +159,12 @@ function acceptsStreams(request: Request): boolean {
 }
 
 function renderSSEData(data: any) {
-  return `${data}`.split("\n").map(line => "data:" + line).join("\n") + "\n\n"
+  return (
+    `${data}`
+      .split("\n")
+      .map((line) => "data:" + line)
+      .join("\n") + "\n\n"
+  )
 }
 
 function escapeHTML(html: string) {

@@ -5,8 +5,12 @@ export class Snapshot<E extends Element = Element> {
     this.element = element
   }
 
+  get activeElement() {
+    return this.element.ownerDocument.activeElement
+  }
+
   get children() {
-    return [ ...this.element.children ]
+    return [...this.element.children]
   }
 
   hasAnchor(anchor: string | undefined) {
@@ -22,11 +26,18 @@ export class Snapshot<E extends Element = Element> {
   }
 
   get firstAutofocusableElement() {
-    return this.element.querySelector("[autofocus]")
+    const inertDisabledOrHidden = "[inert], :disabled, [hidden], details:not([open]), dialog:not([open])"
+
+    for (const element of this.element.querySelectorAll("[autofocus]")) {
+      if (element.closest(inertDisabledOrHidden) == null) return element
+      else continue
+    }
+
+    return null
   }
 
   get permanentElements() {
-    return [ ...this.element.querySelectorAll("[id][data-turbo-permanent]") ]
+    return [...this.element.querySelectorAll("[id][data-turbo-permanent]")]
   }
 
   getPermanentElementById(id: string) {
@@ -40,7 +51,7 @@ export class Snapshot<E extends Element = Element> {
       const { id } = currentPermanentElement
       const newPermanentElement = snapshot.getPermanentElementById(id)
       if (newPermanentElement) {
-        permanentElementMap[id] = [ currentPermanentElement, newPermanentElement ]
+        permanentElementMap[id] = [currentPermanentElement, newPermanentElement]
       }
     }
 

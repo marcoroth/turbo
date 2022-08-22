@@ -3,12 +3,13 @@ import { FetchMethod } from "../../http/fetch_request"
 import { FetchResponse } from "../../http/fetch_response"
 import { FormSubmission } from "./form_submission"
 import { expandURL, getAnchor, getRequestURL, Locatable, locationIsVisitable } from "../url"
+import { getAttribute } from "../../util"
 import { Visit, VisitDelegate, VisitOptions } from "./visit"
 import { PageSnapshot } from "./page_snapshot"
 
 export type NavigatorDelegate = VisitDelegate & {
   allowsVisitingLocationWithAction(location: URL, action?: Action): boolean
-  visitProposedToLocation(location: URL, options: Partial<VisitOptions>): void
+  visitProposedToLocation(location: URL, options: Partial<VisitOptions>): Promise<void>
   notifyApplicationAfterVisitingSamePageLocation(oldURL: URL, newURL: URL): void
 }
 
@@ -16,6 +17,7 @@ export class Navigator {
   readonly delegate: NavigatorDelegate
   formSubmission?: FormSubmission
   currentVisit?: Visit
+  lastVisit?: Visit
 
   constructor(delegate: NavigatorDelegate) {
     this.delegate = delegate
@@ -24,20 +26,27 @@ export class Navigator {
   proposeVisit(location: URL, options: Partial<VisitOptions> = {}) {
     if (this.delegate.allowsVisitingLocationWithAction(location, options.action)) {
       if (locationIsVisitable(location, this.view.snapshot.rootLocation)) {
-        this.delegate.visitProposedToLocation(location, options)
+        return this.delegate.visitProposedToLocation(location, options)
       } else {
         window.location.href = location.toString()
+
+        return Promise.resolve()
       }
+    } else {
+      return Promise.reject()
     }
   }
 
   startVisit(locatable: Locatable, restorationIdentifier: string, options: Partial<VisitOptions> = {}) {
+    this.lastVisit = this.currentVisit
     this.stop()
     this.currentVisit = new Visit(this, expandURL(locatable), restorationIdentifier, {
       referrer: this.location,
-      ...options
+      ...options,
     })
     this.currentVisit.start()
+
+    return this.currentVisit.promise
   }
 
   submitForm(form: HTMLFormElement, submitter?: HTMLElement) {
@@ -75,7 +84,7 @@ export class Navigator {
 
   formSubmissionStarted(formSubmission: FormSubmission) {
     // Not all adapters implement formSubmissionStarted
-    if (typeof this.adapter.formSubmissionStarted === 'function') {
+    if (typeof this.adapter.formSubmissionStarted === "function") {
       this.adapter.formSubmissionStarted(formSubmission)
     }
   }
@@ -84,13 +93,18 @@ export class Navigator {
     if (formSubmission == this.formSubmission) {
       const responseHTML = await fetchResponse.responseHTML
       if (responseHTML) {
-        if (formSubmission.method != FetchMethod.get) {
+        const shouldCacheSnapshot = formSubmission.method == FetchMethod.get
+        if (!shouldCacheSnapshot) {
           this.view.clearSnapshotCache()
         }
 
         const { statusCode, redirected } = fetchResponse
         const action = this.getActionForFormSubmission(formSubmission)
-        const visitOptions = { action, response: { statusCode, responseHTML, redirected } }
+        const visitOptions = {
+          action,
+          shouldCacheSnapshot,
+          response: { statusCode, responseHTML, redirected },
+        }
         this.proposeVisit(fetchResponse.location, visitOptions)
       }
     }
@@ -102,9 +116,9 @@ export class Navigator {
     if (responseHTML) {
       const snapshot = PageSnapshot.fromHTMLString(responseHTML)
       if (fetchResponse.serverError) {
-        await this.view.renderError(snapshot)
+        await this.view.renderError(snapshot, this.currentVisit)
       } else {
-        await this.view.renderPage(snapshot)
+        await this.view.renderPage(snapshot, false, true, this.currentVisit)
       }
       this.view.scrollToTop()
       this.view.clearSnapshotCache()
@@ -117,7 +131,7 @@ export class Navigator {
 
   formSubmissionFinished(formSubmission: FormSubmission) {
     // Not all adapters implement formSubmissionFinished
-    if (typeof this.adapter.formSubmissionFinished === 'function') {
+    if (typeof this.adapter.formSubmissionFinished === "function") {
       this.adapter.formSubmissionFinished(formSubmission)
     }
   }
@@ -134,12 +148,15 @@ export class Navigator {
 
   locationWithActionIsSamePage(location: URL, action?: Action): boolean {
     const anchor = getAnchor(location)
-    const currentAnchor = getAnchor(this.view.lastRenderedLocation)
-    const isRestorationToTop = action === 'restore' && typeof anchor === 'undefined'
+    const lastLocation = this.lastVisit?.location || this.view.lastRenderedLocation
+    const currentAnchor = getAnchor(lastLocation)
+    const isRestorationToTop = action === "restore" && typeof anchor === "undefined"
 
-    return action !== "replace" &&
-      getRequestURL(location) === getRequestURL(this.view.lastRenderedLocation) &&
+    return (
+      action !== "replace" &&
+      getRequestURL(location) === getRequestURL(lastLocation) &&
       (isRestorationToTop || (anchor != null && anchor !== currentAnchor))
+    )
   }
 
   visitScrolledToSamePageLocation(oldURL: URL, newURL: URL) {
@@ -158,7 +175,7 @@ export class Navigator {
 
   getActionForFormSubmission(formSubmission: FormSubmission): Action {
     const { formElement, submitter } = formSubmission
-    const action = submitter?.getAttribute("data-turbo-action") || formElement.getAttribute("data-turbo-action")
+    const action = getAttribute("data-turbo-action", submitter, formElement)
     return isAction(action) ? action : "advance"
   }
 }

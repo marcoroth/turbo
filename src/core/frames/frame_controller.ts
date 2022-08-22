@@ -1,50 +1,92 @@
-import { FrameElement, FrameElementDelegate, FrameLoadingStyle, isTurboFrameElement } from "../../elements/frame_element"
+import {
+  FrameElement,
+  FrameElementDelegate,
+  FrameLoadingStyle,
+  FrameElementObservedAttribute,
+  TurboFrameElement,
+  isTurboFrameElement,
+} from "../../elements/frame_element"
 import { FetchMethod, FetchRequest, FetchRequestDelegate, FetchRequestHeaders } from "../../http/fetch_request"
 import { FetchResponse } from "../../http/fetch_response"
 import { AppearanceObserver, AppearanceObserverDelegate } from "../../observers/appearance_observer"
-import { parseHTMLDocument } from "../../util"
+import {
+  clearBusyState,
+  dispatch,
+  getAttribute,
+  parseHTMLDocument,
+  markAsBusy,
+  uuid,
+  getHistoryMethodForAction,
+  getVisitAction,
+} from "../../util"
 import { FormSubmission, FormSubmissionDelegate } from "../drive/form_submission"
 import { Snapshot } from "../snapshot"
-import { ViewDelegate } from "../view"
-import { expandURL, urlsAreEqual, Locatable } from "../url"
-import { FormInterceptor, FormInterceptorDelegate } from "./form_interceptor"
+import { ViewDelegate, ViewRenderOptions } from "../view"
+import { getAction, expandURL, urlsAreEqual, locationIsVisitable } from "../url"
+import { FormSubmitObserver, FormSubmitObserverDelegate } from "../../observers/form_submit_observer"
 import { FrameView } from "./frame_view"
-import { LinkInterceptor, LinkInterceptorDelegate } from "./link_interceptor"
+import { LinkClickObserver, LinkClickObserverDelegate } from "../../observers/link_click_observer"
+import { FormLinkClickObserver, FormLinkClickObserverDelegate } from "../../observers/form_link_click_observer"
 import { FrameRenderer } from "./frame_renderer"
 import { session } from "../index"
+import { isAction, Action } from "../types"
+import { VisitOptions } from "../drive/visit"
+import { TurboBeforeFrameRenderEvent, TurboFetchRequestErrorEvent } from "../session"
+import { StreamMessage } from "../streams/stream_message"
 
-export class FrameController implements AppearanceObserverDelegate, FetchRequestDelegate, FormInterceptorDelegate, FormSubmissionDelegate, FrameElementDelegate, LinkInterceptorDelegate, ViewDelegate<Snapshot<FrameElement>> {
+export type TurboFrameMissingEvent = CustomEvent<{ fetchResponse: FetchResponse }>
+
+export class FrameController
+  implements
+    AppearanceObserverDelegate,
+    FetchRequestDelegate,
+    FormSubmitObserverDelegate,
+    FormSubmissionDelegate,
+    FrameElementDelegate,
+    FormLinkClickObserverDelegate,
+    LinkClickObserverDelegate,
+    ViewDelegate<FrameElement, Snapshot<FrameElement>>
+{
   readonly element: FrameElement
   readonly view: FrameView
   readonly appearanceObserver: AppearanceObserver
-  readonly linkInterceptor: LinkInterceptor
-  readonly formInterceptor: FormInterceptor
-  currentURL?: string | null
+  readonly formLinkClickObserver: FormLinkClickObserver
+  readonly linkClickObserver: LinkClickObserver
+  readonly formSubmitObserver: FormSubmitObserver
   formSubmission?: FormSubmission
+  fetchResponseLoaded = (_fetchResponse: FetchResponse) => {}
   private currentFetchRequest: FetchRequest | null = null
   private resolveVisitPromise = () => {}
   private connected = false
   private hasBeenLoaded = false
-  private settingSourceURL = false
+  private ignoredAttributes: Set<FrameElementObservedAttribute> = new Set()
+  private action: Action | null = null
+  private frame?: FrameElement
+  readonly restorationIdentifier: string
+  private previousFrameElement?: FrameElement
+  private currentNavigationElement?: Element
 
   constructor(element: FrameElement) {
     this.element = element
     this.view = new FrameView(this, this.element)
     this.appearanceObserver = new AppearanceObserver(this, this.element)
-    this.linkInterceptor = new LinkInterceptor(this, this.element)
-    this.formInterceptor = new FormInterceptor(this, this.element)
+    this.formLinkClickObserver = new FormLinkClickObserver(this, this.element)
+    this.linkClickObserver = new LinkClickObserver(this, this.element)
+    this.restorationIdentifier = uuid()
+    this.formSubmitObserver = new FormSubmitObserver(this, this.element)
   }
 
   connect() {
     if (!this.connected) {
       this.connected = true
-      this.reloadable = false
       if (this.loadingStyle == FrameLoadingStyle.lazy) {
         this.appearanceObserver.start()
+      } else {
+        this.loadSourceURL()
       }
-      this.linkInterceptor.start()
-      this.formInterceptor.start()
-      this.sourceURLChanged()
+      this.formLinkClickObserver.start()
+      this.linkClickObserver.start()
+      this.formSubmitObserver.start()
     }
   }
 
@@ -52,8 +94,9 @@ export class FrameController implements AppearanceObserverDelegate, FetchRequest
     if (this.connected) {
       this.connected = false
       this.appearanceObserver.stop()
-      this.linkInterceptor.stop()
-      this.formInterceptor.stop()
+      this.formLinkClickObserver.stop()
+      this.linkClickObserver.stop()
+      this.formSubmitObserver.stop()
     }
   }
 
@@ -64,9 +107,21 @@ export class FrameController implements AppearanceObserverDelegate, FetchRequest
   }
 
   sourceURLChanged() {
+    if (this.isIgnoringChangesTo("src")) return
+
+    if (this.element.isConnected) {
+      this.complete = false
+    }
+
     if (this.loadingStyle == FrameLoadingStyle.eager || this.hasBeenLoaded) {
       this.loadSourceURL()
     }
+  }
+
+  completeChanged() {
+    if (this.isIgnoringChangesTo("complete")) return
+
+    this.loadSourceURL()
   }
 
   loadingStyleChanged() {
@@ -78,27 +133,17 @@ export class FrameController implements AppearanceObserverDelegate, FetchRequest
     }
   }
 
-  async loadSourceURL() {
-    if (!this.settingSourceURL && this.enabled && this.isActive && (this.reloadable || this.sourceURL != this.currentURL)) {
-      const previousURL = this.currentURL
-      this.currentURL = this.sourceURL
-      if (this.sourceURL) {
-        try {
-          this.element.loaded = this.visit(this.sourceURL)
-          this.appearanceObserver.stop()
-          await this.element.loaded
-          this.hasBeenLoaded = true
-          session.frameLoaded(this.element)
-        } catch (error) {
-          this.currentURL = previousURL
-          throw error
-        }
-      }
+  private async loadSourceURL() {
+    if (this.enabled && this.isActive && !this.complete && this.sourceURL) {
+      this.element.loaded = this.visit(expandURL(this.sourceURL))
+      this.appearanceObserver.stop()
+      await this.element.loaded
+      this.hasBeenLoaded = true
     }
   }
 
   async loadResponse(fetchResponse: FetchResponse) {
-    if (fetchResponse.redirected) {
+    if (fetchResponse.redirected || (fetchResponse.succeeded && fetchResponse.isHTML)) {
       this.sourceURL = fetchResponse.response.url
     }
 
@@ -106,51 +151,76 @@ export class FrameController implements AppearanceObserverDelegate, FetchRequest
       const html = await fetchResponse.responseHTML
       if (html) {
         const { body } = parseHTMLDocument(html)
-        const snapshot = new Snapshot(await this.extractForeignFrameElement(body))
-        const renderer = new FrameRenderer(this.view.snapshot, snapshot, false)
-        if (this.view.renderPromise) await this.view.renderPromise
-        await this.view.render(renderer)
-        session.frameRendered(fetchResponse, this.element);
+        const newFrameElement = await this.extractForeignFrameElement(body)
+
+        if (newFrameElement) {
+          const snapshot = new Snapshot(newFrameElement)
+          const renderer = new FrameRenderer(
+            this,
+            this.view.snapshot,
+            snapshot,
+            FrameRenderer.renderElement,
+            false,
+            false
+          )
+          if (this.view.renderPromise) await this.view.renderPromise
+          this.changeHistory()
+
+          await this.view.render(renderer)
+          this.complete = true
+          session.frameRendered(fetchResponse, this.element)
+          session.frameLoaded(this.element)
+          this.fetchResponseLoaded(fetchResponse)
+        } else if (this.sessionWillHandleMissingFrame(fetchResponse)) {
+          await session.frameMissing(this.element, fetchResponse)
+        }
       }
     } catch (error) {
       console.error(error)
       this.view.invalidate()
+    } finally {
+      this.fetchResponseLoaded = () => {}
     }
   }
 
   // Appearance observer delegate
 
-  elementAppearedInViewport(element: Element) {
+  elementAppearedInViewport(_element: Element) {
     this.loadSourceURL()
   }
 
-  // Link interceptor delegate
+  // Form link click observer delegate
 
-  shouldInterceptLinkClick(element: Element, url: string) {
-    if (element.hasAttribute("data-turbo-method")) {
-      return false
-    } else {
-      return this.shouldInterceptNavigation(element)
-    }
+  willSubmitFormLinkToLocation(link: Element): boolean {
+    return link.closest("turbo-frame") == this.element && this.shouldInterceptNavigation(link)
   }
 
-  linkClickIntercepted(element: Element, url: string) {
-    this.reloadable = true
-    this.navigateFrame(element, url)
+  submittedFormLinkToLocation(link: Element, _location: URL, form: HTMLFormElement): void {
+    const frame = this.findFrameElement(link)
+    if (frame) form.setAttribute("data-turbo-frame", frame.id)
   }
 
-  // Form interceptor delegate
+  // Link click observer delegate
 
-  shouldInterceptFormSubmission(element: HTMLFormElement, submitter?: Element) {
-    return this.shouldInterceptNavigation(element, submitter)
+  willFollowLinkToLocation(element: Element) {
+    return this.shouldInterceptNavigation(element)
   }
 
-  formSubmissionIntercepted(element: HTMLFormElement, submitter?: HTMLElement) {
+  followedLinkToLocation(element: Element, location: URL) {
+    this.navigateFrame(element, location.href)
+  }
+
+  // Form submit observer delegate
+
+  willSubmitForm(element: HTMLFormElement, submitter?: HTMLElement) {
+    return element.closest("turbo-frame") == this.element && this.shouldInterceptNavigation(element, submitter)
+  }
+
+  formSubmitted(element: HTMLFormElement, submitter?: HTMLElement) {
     if (this.formSubmission) {
       this.formSubmission.stop()
     }
 
-    this.reloadable = false
     this.formSubmission = new FormSubmission(this, element, submitter)
     const { fetchRequest } = this.formSubmission
     this.prepareHeadersForRequest(fetchRequest.headers, fetchRequest)
@@ -161,13 +231,17 @@ export class FrameController implements AppearanceObserverDelegate, FetchRequest
 
   prepareHeadersForRequest(headers: FetchRequestHeaders, request: FetchRequest) {
     headers["Turbo-Frame"] = this.id
+
+    if (this.currentNavigationElement?.hasAttribute("data-turbo-stream")) {
+      request.acceptResponseType(StreamMessage.contentType)
+    }
   }
 
-  requestStarted(request: FetchRequest) {
-    this.element.setAttribute("busy", "")
+  requestStarted(_request: FetchRequest) {
+    markAsBusy(this.element)
   }
 
-  requestPreventedHandlingResponse(request: FetchRequest, response: FetchResponse) {
+  requestPreventedHandlingResponse(_request: FetchRequest, _response: FetchResponse) {
     this.resolveVisitPromise()
   }
 
@@ -183,22 +257,28 @@ export class FrameController implements AppearanceObserverDelegate, FetchRequest
 
   requestErrored(request: FetchRequest, error: Error) {
     console.error(error)
+    dispatch<TurboFetchRequestErrorEvent>("turbo:fetch-request-error", {
+      target: this.element,
+      detail: { request, error },
+    })
     this.resolveVisitPromise()
   }
 
-  requestFinished(request: FetchRequest) {
-    this.element.removeAttribute("busy")
+  requestFinished(_request: FetchRequest) {
+    clearBusyState(this.element)
   }
 
   // Form submission delegate
 
-  formSubmissionStarted(formSubmission: FormSubmission) {
-    const frame = this.findFrameElement(formSubmission.formElement)
-    frame.setAttribute("busy", "")
+  formSubmissionStarted({ formElement }: FormSubmission) {
+    markAsBusy(formElement, this.findFrameElement(formElement))
   }
 
   formSubmissionSucceededWithResponse(formSubmission: FormSubmission, response: FetchResponse) {
     const frame = this.findFrameElement(formSubmission.formElement, formSubmission.submitter)
+
+    this.proposeVisitIfNavigatedWithAction(frame, formSubmission.formElement, formSubmission.submitter)
+
     frame.delegate.loadResponse(response)
   }
 
@@ -210,32 +290,62 @@ export class FrameController implements AppearanceObserverDelegate, FetchRequest
     console.error(error)
   }
 
-  formSubmissionFinished(formSubmission: FormSubmission) {
-    const frame = this.findFrameElement(formSubmission.formElement)
-    frame.removeAttribute("busy")
+  formSubmissionFinished({ formElement }: FormSubmission) {
+    clearBusyState(formElement, this.findFrameElement(formElement))
   }
 
   // View delegate
 
-  allowsImmediateRender(snapshot: Snapshot, resume: (value: any) => void) {
-    return true
+  allowsImmediateRender({ element: newFrame }: Snapshot<FrameElement>, options: ViewRenderOptions<FrameElement>) {
+    const event = dispatch<TurboBeforeFrameRenderEvent>("turbo:before-frame-render", {
+      target: this.element,
+      detail: { newFrame, ...options },
+      cancelable: true,
+    })
+    const {
+      defaultPrevented,
+      detail: { render },
+    } = event
+
+    if (this.view.renderer && render) {
+      this.view.renderer.renderElement = render
+    }
+
+    return !defaultPrevented
   }
 
-  viewRenderedSnapshot(snapshot: Snapshot, isPreview: boolean) {
+  viewRenderedSnapshot(_snapshot: Snapshot, _isPreview: boolean) {}
+
+  preloadOnLoadLinksForView(element: Element) {
+    session.preloadOnLoadLinksForView(element)
   }
 
-  viewInvalidated() {
+  viewInvalidated() {}
+
+  // Frame renderer delegate
+  willRenderFrame(currentElement: FrameElement, _newElement: FrameElement) {
+    this.previousFrameElement = currentElement.cloneNode(true)
+  }
+
+  visitCachedSnapshot = ({ element }: Snapshot) => {
+    const frame = element.querySelector("#" + this.element.id)
+
+    if (frame && this.previousFrameElement) {
+      frame.replaceChildren(...this.previousFrameElement.children)
+    }
+
+    delete this.previousFrameElement
   }
 
   // Private
 
-  private async visit(url: Locatable) {
-    const request = new FetchRequest(this, FetchMethod.get, expandURL(url), new URLSearchParams, this.element)
+  private async visit(url: URL) {
+    const request = new FetchRequest(this, FetchMethod.get, url, new URLSearchParams(), this.element)
 
     this.currentFetchRequest?.cancel()
     this.currentFetchRequest = request
 
-    return new Promise<void>(resolve => {
+    return new Promise<void>((resolve) => {
       this.resolveVisitPromise = () => {
         this.resolveVisitPromise = () => {}
         this.currentFetchRequest = null
@@ -247,39 +357,101 @@ export class FrameController implements AppearanceObserverDelegate, FetchRequest
 
   private navigateFrame(element: Element, url: string, submitter?: HTMLElement) {
     const frame = this.findFrameElement(element, submitter)
-    frame.setAttribute("reloadable", "")
-    frame.src = url
+
+    this.proposeVisitIfNavigatedWithAction(frame, element, submitter)
+
+    this.withCurrentNavigationElement(element, () => {
+      frame.src = url
+    })
+  }
+
+  private proposeVisitIfNavigatedWithAction(frame: FrameElement, element: Element, submitter?: HTMLElement) {
+    this.action = getVisitAction(submitter, element, frame)
+    this.frame = frame
+
+    if (isAction(this.action)) {
+      const { visitCachedSnapshot } = frame.delegate
+
+      frame.delegate.fetchResponseLoaded = (fetchResponse: FetchResponse) => {
+        if (frame.src) {
+          const { statusCode, redirected } = fetchResponse
+          const responseHTML = frame.ownerDocument.documentElement.outerHTML
+          const response = { statusCode, redirected, responseHTML }
+          const options: Partial<VisitOptions> = {
+            response,
+            visitCachedSnapshot,
+            willRender: false,
+            updateHistory: false,
+            restorationIdentifier: this.restorationIdentifier,
+          }
+
+          if (this.action) options.action = this.action
+
+          session.visit(frame.src, options)
+        }
+      }
+    }
+  }
+
+  changeHistory() {
+    if (this.action && this.frame) {
+      const method = getHistoryMethodForAction(this.action)
+      session.history.update(method, expandURL(this.frame.src || ""), this.restorationIdentifier)
+    }
+  }
+
+  private sessionWillHandleMissingFrame(fetchResponse: FetchResponse) {
+    this.element.setAttribute("complete", "")
+
+    const event = dispatch<TurboFrameMissingEvent>("turbo:frame-missing", {
+      target: this.element,
+      detail: { fetchResponse },
+      cancelable: true,
+    })
+
+    return !event.defaultPrevented
   }
 
   private findFrameElement(element: Element, submitter?: HTMLElement) {
-    const id = submitter?.getAttribute("data-turbo-frame") || element.getAttribute("data-turbo-frame") || this.element.getAttribute("target")
+    const id = getAttribute("data-turbo-frame", submitter, element) || this.element.getAttribute("target")
     return getFrameElementById(id) ?? this.element
   }
 
-  async extractForeignFrameElement(container: ParentNode): Promise<FrameElement> {
+  async extractForeignFrameElement(container: ParentNode): Promise<FrameElement | null> {
     let element
     const id = CSS.escape(this.id)
 
     try {
-      if (element = activateElement(container.querySelector(`${this.element.selector}#${id}`), this.currentURL)) {
+      element = activateElement(container.querySelector(`${this.element.selector}#${id}`), this.sourceURL)
+      if (element) {
         return element
       }
 
-      if (element = activateElement(container.querySelector(`${this.element.selector}[src][recurse~=${id}]`), this.currentURL)) {
+      element = activateElement(container.querySelector(`${this.element.selector}[src][recurse~=${id}]`), this.sourceURL)
+      if (element) {
         await element.loaded
         return await this.extractForeignFrameElement(element)
       }
-
-      console.error(`Response has no element matching ${this.element.selector}#${id}`)
     } catch (error) {
       console.error(error)
+      return new TurboFrameElement()
     }
 
     return new this.elementConstructor()
   }
 
-  private shouldInterceptNavigation(element: Element, submitter?: Element) {
-    const id = submitter?.getAttribute("data-turbo-frame") || element.getAttribute("data-turbo-frame") || this.element.getAttribute("target")
+  private formActionIsVisitable(form: HTMLFormElement, submitter?: HTMLElement) {
+    const action = getAction(form, submitter)
+
+    return locationIsVisitable(expandURL(action), this.rootLocation)
+  }
+
+  private shouldInterceptNavigation(element: Element, submitter?: HTMLElement) {
+    const id = getAttribute("data-turbo-frame", submitter, element) || this.element.getAttribute("target")
+
+    if (element instanceof HTMLFormElement && !this.formActionIsVisitable(element, submitter)) {
+      return false
+    }
 
     if (!this.enabled || id == "_top") {
       return false
@@ -292,11 +464,11 @@ export class FrameController implements AppearanceObserverDelegate, FetchRequest
       }
     }
 
-    if (!session.elementDriveEnabled(element)) {
+    if (!session.elementIsNavigatable(element)) {
       return false
     }
 
-    if (submitter && !session.elementDriveEnabled(submitter)) {
+    if (submitter && !session.elementIsNavigatable(submitter)) {
       return false
     }
 
@@ -323,25 +495,10 @@ export class FrameController implements AppearanceObserverDelegate, FetchRequest
     }
   }
 
-  get reloadable() {
-    const frame = this.findFrameElement(this.element)
-    return frame.hasAttribute("reloadable")
-  }
-
-  set reloadable(value: boolean) {
-    const frame = this.findFrameElement(this.element)
-    if (value) {
-      frame.setAttribute("reloadable", "")
-    } else {
-      frame.removeAttribute("reloadable")
-    }
-  }
-
   set sourceURL(sourceURL: string | undefined) {
-    this.settingSourceURL = true
-    this.element.src = sourceURL ?? null
-    this.currentURL = this.element.src
-    this.settingSourceURL = false
+    this.ignoringChangesToAttribute("src", () => {
+      this.element.src = sourceURL ?? null
+    })
   }
 
   get loadingStyle() {
@@ -352,8 +509,44 @@ export class FrameController implements AppearanceObserverDelegate, FetchRequest
     return this.formSubmission !== undefined || this.resolveVisitPromise() !== undefined
   }
 
+  get complete() {
+    return this.element.hasAttribute("complete")
+  }
+
+  set complete(value: boolean) {
+    this.ignoringChangesToAttribute("complete", () => {
+      if (value) {
+        this.element.setAttribute("complete", "")
+      } else {
+        this.element.removeAttribute("complete")
+      }
+    })
+  }
+
   get isActive() {
     return this.element.isActive && this.connected
+  }
+
+  get rootLocation() {
+    const meta = this.element.ownerDocument.querySelector<HTMLMetaElement>(`meta[name="turbo-root"]`)
+    const root = meta?.content ?? "/"
+    return expandURL(root)
+  }
+
+  private isIgnoringChangesTo(attributeName: FrameElementObservedAttribute): boolean {
+    return this.ignoredAttributes.has(attributeName)
+  }
+
+  private ignoringChangesToAttribute(attributeName: FrameElementObservedAttribute, callback: () => void) {
+    this.ignoredAttributes.add(attributeName)
+    callback()
+    this.ignoredAttributes.delete(attributeName)
+  }
+
+  private withCurrentNavigationElement(element: Element, callback: () => void) {
+    this.currentNavigationElement = element
+    callback()
+    delete this.currentNavigationElement
   }
 }
 
@@ -378,6 +571,7 @@ function activateElement(element: Element | null, currentURL?: string | null) {
 
     if (isTurboFrameElement(element)) {
       element.connectedCallback()
+      element.disconnectedCallback()
       return element
     }
   }

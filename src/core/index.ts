@@ -1,16 +1,38 @@
 import { Adapter } from "./native/adapter"
-import { Session } from "./session"
+import { FormMode, Session } from "./session"
+import { Cache } from "./cache"
 import { Locatable } from "./url"
 import { StreamMessage } from "./streams/stream_message"
 import { StreamSource } from "./types"
 import { VisitOptions } from "./drive/visit"
 import { PageRenderer } from "./drive/page_renderer"
 import { PageSnapshot } from "./drive/page_snapshot"
+import { FrameRenderer } from "./frames/frame_renderer"
 import { FormSubmission } from "./drive/form_submission"
 
-const session = new Session
+const session = new Session()
+const cache = new Cache(session)
 const { navigator } = session
-export { navigator, session, PageRenderer, PageSnapshot }
+export { navigator, session, cache, PageRenderer, PageSnapshot, FrameRenderer }
+export {
+  TurboBeforeCacheEvent,
+  TurboBeforeRenderEvent,
+  TurboBeforeVisitEvent,
+  TurboClickEvent,
+  TurboFetchRequestErrorEvent,
+  TurboFrameLoadEvent,
+  TurboFrameRenderEvent,
+  TurboLoadEvent,
+  TurboRenderEvent,
+  TurboVisitEvent,
+} from "./session"
+
+export { TurboSubmitStartEvent, TurboSubmitEndEvent } from "./drive/form_submission"
+export { TurboFrameMissingEvent } from "./frames/frame_controller"
+export { TurboBeforeFetchRequestEvent, TurboBeforeFetchResponseEvent } from "../http/fetch_request"
+export { TurboBeforeStreamRenderEvent } from "../elements/stream_element"
+
+export { StreamActions } from "./streams/stream_actions"
 
 /**
  * Starts the main session.
@@ -44,8 +66,8 @@ export function registerAdapter(adapter: Adapter) {
  * @param options.snapshotHTML Cached snapshot to render
  * @param options.response Response of the specified location
  */
-export function visit(location: Locatable, options?: Partial<VisitOptions>) {
-  session.visit(location, options)
+export function visit(location: Locatable, options?: Partial<VisitOptions>): Promise<void> {
+  return session.visit(location, options)
 }
 
 /**
@@ -79,8 +101,13 @@ export function renderStreamMessage(message: StreamMessage | string) {
 /**
  * Removes all entries from the Turbo Drive page cache.
  * Call this when state has changed on the server that may affect cached pages.
+ *
+ * @deprecated since version 7.2.0 in favor of `Turbo.cache.clear()`
  */
 export function clearCache() {
+  console.warn(
+    "Please replace `Turbo.clearCache()` with `Turbo.cache.clear()`. The top-level function is deprecated and will be removed in a future version of Turbo.`"
+  )
   session.clearCache()
 }
 
@@ -98,10 +125,16 @@ export function setProgressBarDelay(delay: number) {
   session.setProgressBarDelay(delay)
 }
 
-export function setConfirmMethod(confirmMethod: (message: string, element: HTMLFormElement)=>boolean) {
+export function setConfirmMethod(
+  confirmMethod: (message: string, element: HTMLFormElement, submitter: HTMLElement | undefined) => Promise<boolean>
+) {
   FormSubmission.confirmMethod = confirmMethod
 }
 
 export function defineCustomFrameElement(name: string) {
   session.defineCustomFrameElement(name)
+}
+
+export function setFormMode(mode: FormMode) {
+  session.setFormMode(mode)
 }

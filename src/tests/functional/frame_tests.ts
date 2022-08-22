@@ -1,296 +1,779 @@
-import { TurboDriveTestCase } from "../helpers/turbo_drive_test_case"
+import { Page, test } from "@playwright/test"
+import { assert, Assertion } from "chai"
+import {
+  attributeForSelector,
+  hasSelector,
+  innerHTMLForSelector,
+  nextAttributeMutationNamed,
+  nextBeat,
+  nextEventNamed,
+  nextEventOnTarget,
+  noNextEventNamed,
+  noNextEventOnTarget,
+  pathname,
+  propertyForSelector,
+  readEventLogs,
+  scrollPosition,
+  scrollToSelector,
+  searchParams,
+} from "../helpers/page"
 
-export class FrameTests extends TurboDriveTestCase {
-  async setup() {
-    await this.goToLocation("/src/tests/fixtures/frames.html")
-  }
+assert.equal = function (actual: any, expected: any, message?: string) {
+  actual = typeof actual == "string" ? actual.trim() : actual
+  expected = typeof expected == "string" ? expected.trim() : expected
 
-  async "test following a link preserves the current <turbo-frame> element's attributes"() {
-    const currentPath = await this.pathname
+  const assertExpectation = new Assertion(expected)
 
-    await this.clickSelector("#hello a")
-    await this.nextBeat
+  assertExpectation.to.equal(expected, message)
+}
 
-    const frame = await this.querySelector("turbo-frame#frame")
-    this.assert.equal(await frame.getAttribute("data-loaded-from"), currentPath)
-    this.assert.equal(await frame.getAttribute("src"), await this.propertyForSelector("#hello a", "href"))
-  }
+test.beforeEach(async ({ page }) => {
+  await page.goto("/src/tests/fixtures/frames.html")
+  await readEventLogs(page)
+})
 
-  async "test a frame whose src references itself does not infinitely loop"() {
-    await this.clickSelector("#frame-self")
+test("test navigating a frame with Turbo.visit", async ({ page }) => {
+  const pathname = "/src/tests/fixtures/frames/frame.html"
 
-    await this.nextEventOnTarget("frame", "turbo:frame-load")
+  await page.locator("#frame").evaluate((frame) => frame.setAttribute("disabled", ""))
+  await page.evaluate((pathname) => window.Turbo.visit(pathname, { frame: "frame" }), pathname)
+  await nextBeat()
 
-    const otherEvents = await this.eventLogChannel.read()
-    this.assert.equal(otherEvents.length, 0, "no more events")
-  }
+  assert.equal(await page.textContent("#frame h2"), "Frames: #frame", "does not navigate a disabled frame")
 
-  async "test following a link driving a frame toggles the [busy] attribute"() {
-    await this.clickSelector("#hello a")
+  await page.locator("#frame").evaluate((frame) => frame.removeAttribute("disabled"))
+  await page.evaluate((pathname) => window.Turbo.visit(pathname, { frame: "frame" }), pathname)
+  await nextBeat()
 
-    this.assert.equal(await this.nextAttributeMutationNamed("frame", "busy"), "", "sets [busy] on the #frame")
-    this.assert.equal(await this.nextAttributeMutationNamed("frame", "busy"), null, "removes [busy] from the #frame")
-  }
+  assert.equal(await page.textContent("#frame h2"), "Frame: loaded", "navigates the target frame")
+})
 
-  async "test following a link to a page without a matching frame results in an empty frame"() {
-    await this.clickSelector("#missing a")
-    await this.nextBeat
-    this.assert.notOk(await this.innerHTMLForSelector("#missing"))
-  }
+test("test navigating a frame a second time does not leak event listeners", async ({ page }) => {
+  await withoutChangingEventListenersCount(page, async () => {
+    await page.click("#outer-frame-link")
+    await nextEventOnTarget(page, "frame", "turbo:frame-load")
+    await page.click("#outside-frame-form")
+    await nextEventOnTarget(page, "frame", "turbo:frame-load")
+    await page.click("#outer-frame-link")
+    await nextEventOnTarget(page, "frame", "turbo:frame-load")
+  })
+})
 
-  async "test following a link within a frame with a target set navigates the target frame"() {
-    await this.clickSelector("#hello a")
-    await this.nextBeat
+test("test following a link preserves the current <turbo-frame> element's attributes", async ({ page }) => {
+  const currentPath = pathname(page.url())
 
-    const frameText = await this.querySelector("#frame h2")
-    this.assert.equal(await frameText.getVisibleText(), "Frame: Loaded")
-  }
+  await page.click("#hello a")
+  await nextBeat()
 
-  async "test following a link in rapid succession cancels the previous request"() {
-    await this.clickSelector("#outside-frame-form")
-    await this.clickSelector("#outer-frame-link")
-    await this.nextBeat
+  const frame = await page.locator("turbo-frame#frame")
+  assert.equal(await frame.getAttribute("data-loaded-from"), currentPath)
+  assert.equal(await frame.getAttribute("src"), await propertyForSelector(page, "#hello a", "href"))
+})
 
-    const frameText = await this.querySelector("#frame h2")
-    this.assert.equal(await frameText.getVisibleText(), "Frame: Loaded")
-  }
+test("test following a link sets the frame element's [src]", async ({ page }) => {
+  await page.click("#link-frame-with-search-params")
 
-  async "test following a link within a descendant frame whose ancestor declares a target set navigates the descendant frame"() {
-    const link = await this.querySelector("#nested-root[target=frame] #nested-child a:not([data-turbo-frame])")
-    const href = await link.getProperty("href")
+  const { url } = await nextEventOnTarget(page, "frame", "turbo:before-fetch-request")
+  const fetchRequestUrl = new URL(url)
 
-    await link.click()
-    await this.nextBeat
+  assert.equal(fetchRequestUrl.pathname, "/src/tests/fixtures/frames/frame.html")
+  assert.equal(fetchRequestUrl.searchParams.get("key"), "value", "fetch request encodes query parameters")
 
-    const frame = await this.querySelector("#frame h2")
-    const nestedRoot = await this.querySelector("#nested-root h2")
-    const nestedChild = await this.querySelector("#nested-child")
-    this.assert.equal(await frame.getVisibleText(), "Frames: #frame")
-    this.assert.equal(await nestedRoot.getVisibleText(), "Frames: #nested-root")
-    this.assert.equal(await nestedChild.getVisibleText(), "Frame: Loaded")
-    this.assert.equal(await this.attributeForSelector("#frame", "src"), null)
-    this.assert.equal(await this.attributeForSelector("#nested-root", "src"), null)
-    this.assert.equal(await this.attributeForSelector("#nested-child", "src"), href)
-  }
+  await nextBeat()
+  const src = new URL((await attributeForSelector(page, "#frame", "src")) || "")
 
-  async "test following a link that declares data-turbo-frame within a frame whose ancestor respects the override"() {
-    await this.clickSelector("#nested-root[target=frame] #nested-child a[data-turbo-frame]")
-    await this.nextBeat
+  assert.equal(src.pathname, "/src/tests/fixtures/frames/frame.html")
+  assert.equal(src.searchParams.get("key"), "value", "[src] attribute encodes query parameters")
+})
 
-    const frameText = await this.querySelector("body > h1")
-    this.assert.equal(await frameText.getVisibleText(), "One")
-    this.assert.notOk(await this.hasSelector("#frame"))
-    this.assert.notOk(await this.hasSelector("#nested-root"))
-    this.assert.notOk(await this.hasSelector("#nested-child"))
-  }
+test("test a frame whose src references itself does not infinitely loop", async ({ page }) => {
+  await page.click("#frame-self")
 
-  async "test following a form within a nested frame with form target top"() {
-    await this.clickSelector("#nested-child-navigate-form-top-submit")
-    await this.nextBeat
+  await nextEventOnTarget(page, "frame", "turbo:frame-render")
+  await nextEventOnTarget(page, "frame", "turbo:frame-load")
 
-    const frameText = await this.querySelector("body > h1")
-    this.assert.equal(await frameText.getVisibleText(), "One")
-    this.assert.notOk(await this.hasSelector("#frame"))
-    this.assert.notOk(await this.hasSelector("#nested-root"))
-    this.assert.notOk(await this.hasSelector("#nested-child"))
-  }
+  const otherEvents = await readEventLogs(page)
+  assert.equal(otherEvents.length, 0, "no more events")
+})
 
-  async "test following a form within a nested frame with child frame target top"() {
-    await this.clickSelector("#nested-child-navigate-top-submit")
-    await this.nextBeat
+test("test following a link driving a frame toggles the [aria-busy=true] attribute", async ({ page }) => {
+  await page.click("#hello a")
 
-    const frameText = await this.querySelector("body > h1")
-    this.assert.equal(await frameText.getVisibleText(), "One")
-    this.assert.notOk(await this.hasSelector("#frame"))
-    this.assert.notOk(await this.hasSelector("#nested-root"))
-    this.assert.notOk(await this.hasSelector("#nested-child-navigate-top"))
-  }
+  assert.equal(await nextAttributeMutationNamed(page, "frame", "busy"), "", "sets [busy] on the #frame")
+  assert.equal(
+    await nextAttributeMutationNamed(page, "frame", "aria-busy"),
+    "true",
+    "sets [aria-busy=true] on the #frame"
+  )
+  assert.equal(await nextAttributeMutationNamed(page, "frame", "busy"), null, "removes [busy] on the #frame")
+  assert.equal(
+    await nextAttributeMutationNamed(page, "frame", "aria-busy"),
+    null,
+    "removes [aria-busy] from the #frame"
+  )
+})
 
-  async "test following a link within a frame with target=_top navigates the page"() {
-    this.assert.equal(await this.attributeForSelector("#navigate-top" ,"src"), null)
+test("test following a link to a page without a matching frame dispatches a turbo:frame-missing event", async ({
+  page,
+}) => {
+  await page.click("#missing a")
+  await noNextEventOnTarget(page, "missing", "turbo:frame-render")
+  await noNextEventOnTarget(page, "missing", "turbo:frame-load")
+  const { fetchResponse } = await nextEventOnTarget(page, "missing", "turbo:frame-missing")
+  await noNextEventNamed(page, "turbo:before-fetch-request")
+  await nextEventNamed(page, "turbo:load")
 
-    await this.clickSelector("#navigate-top a:not([data-turbo-frame])")
-    await this.nextBeat
+  assert.ok(fetchResponse, "dispatchs turbo:frame-missing with event.detail.fetchResponse")
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/frames/frame.html", "navigates the page")
 
-    const frameText = await this.querySelector("body > h1")
-    this.assert.equal(await frameText.getVisibleText(), "One")
-    this.assert.notOk(await this.hasSelector("#navigate-top a"))
-  }
+  await page.goBack()
+  await nextEventNamed(page, "turbo:load")
 
-  async "test following a link that declares data-turbo-frame='_self' within a frame with target=_top navigates the frame itself"() {
-    this.assert.equal(await this.attributeForSelector("#navigate-top" ,"src"), null)
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/frames.html")
+  assert.ok(await innerHTMLForSelector(page, "#missing"))
+})
 
-    await this.clickSelector("#navigate-top a[data-turbo-frame='_self']")
-    await this.nextBeat
+test("test following a link to a page without a matching frame dispatches a turbo:frame-missing event that can be cancelled", async ({
+  page,
+}) => {
+  await page.locator("#missing").evaluate((frame) => {
+    frame.addEventListener(
+      "turbo:frame-missing",
+      (event) => {
+        event.preventDefault()
 
-    const title = await this.querySelector("body > h1")
-    this.assert.equal(await title.getVisibleText(), "Frames")
-    this.assert.ok(await this.hasSelector("#navigate-top"))
-    const frame = await this.querySelector("#navigate-top")
-    this.assert.equal(await frame.getVisibleText(), "Replaced only the frame")
-  }
+        if (event.target instanceof HTMLElement) {
+          event.target.textContent = "Overridden"
+        }
+      },
+      { once: true }
+    )
+  })
+  await page.click("#missing a")
+  await nextEventOnTarget(page, "missing", "turbo:frame-missing")
 
-  async "test following a link to a page with a <turbo-frame recurse> which lazily loads a matching frame"() {
-    await this.nextBeat
-    await this.clickSelector("#recursive summary")
-    this.assert.ok(await this.querySelector("#recursive details[open]"))
+  assert.equal(await page.textContent("#missing"), "Overridden")
+})
 
-    await this.clickSelector("#recursive a")
-    await this.nextBeat
-    this.assert.ok(await this.querySelector("#recursive details:not([open])"))
-  }
+test("test following a link to a page with a matching frame does not dispatch a turbo:frame-missing event", async ({
+  page,
+}) => {
+  await page.click("#link-frame")
+  await noNextEventNamed(page, "turbo:frame-missing")
+  await nextEventOnTarget(page, "frame", "turbo:frame-load")
 
-  async "test submitting a form that redirects to a page with a <turbo-frame recurse> which lazily loads a matching frame"() {
-    await this.nextBeat
-    await this.clickSelector("#recursive summary")
-    this.assert.ok(await this.querySelector("#recursive details[open]"))
+  const src = await attributeForSelector(page, "#frame", "src")
+  assert(
+    src?.includes("/src/tests/fixtures/frames/frame.html"),
+    "navigates frame without dispatching turbo:frame-missing"
+  )
+})
 
-    await this.clickSelector("#recursive input[type=submit]")
-    await this.nextBeat
-    this.assert.ok(await this.querySelector("#recursive details:not([open])"))
-  }
+test("test following a link within a frame with a target set navigates the target frame", async ({ page }) => {
+  await page.click("#hello a")
+  await nextBeat()
 
-  async "test removing [disabled] attribute from eager-loaded frame navigates it"() {
-    await this.remote.execute(() => document.getElementById("frame")?.setAttribute("disabled", ""))
-    await this.remote.execute((src: string) => document.getElementById("frame")?.setAttribute("src", "/src/tests/fixtures/frames/frame.html"))
+  const frameText = await page.textContent("#frame h2")
+  assert.equal(frameText, "Frame: Loaded")
+})
 
-    this.assert.ok(await this.noNextEventNamed("turbo:before-fetch-request"), "[disabled] frames do not submit requests")
+test("test following a link in rapid succession cancels the previous request", async ({ page }) => {
+  await page.click("#outside-frame-form")
+  await page.click("#outer-frame-link")
+  await nextBeat()
 
-    await this.remote.execute(() => document.getElementById("frame")?.removeAttribute("disabled"))
+  const frameText = await page.textContent("#frame h2")
+  assert.equal(frameText, "Frame: Loaded")
+})
 
-    await this.nextEventNamed("turbo:before-fetch-request")
-  }
+test("test following a link within a descendant frame whose ancestor declares a target set navigates the descendant frame", async ({
+  page,
+}) => {
+  const selector = "#nested-root[target=frame] #nested-child a:not([data-turbo-frame])"
+  const link = await page.locator(selector)
+  const href = await propertyForSelector(page, selector, "href")
 
-  async "test evaluates frame script elements on each render"() {
-    this.assert.equal(await this.frameScriptEvaluationCount, undefined)
+  await link.click()
+  await nextBeat()
 
-    this.clickSelector("#body-script-link")
-    await this.sleep(200)
-    this.assert.equal(await this.frameScriptEvaluationCount, 1)
+  const frame = await page.textContent("#frame h2")
+  const nestedRoot = await page.textContent("#nested-root h2")
+  const nestedChild = await page.textContent("#nested-child")
+  assert.equal(frame, "Frames: #frame")
+  assert.equal(nestedRoot, "Frames: #nested-root")
+  assert.equal(nestedChild, "Frame: Loaded")
+  assert.equal(await attributeForSelector(page, "#frame", "src"), null)
+  assert.equal(await attributeForSelector(page, "#nested-root", "src"), null)
+  assert.equal(await attributeForSelector(page, "#nested-child", "src"), href || "")
+})
 
-    this.clickSelector("#body-script-link")
-    await this.sleep(200)
-    this.assert.equal(await this.frameScriptEvaluationCount, 2)
-  }
+test("test following a link that declares data-turbo-frame within a frame whose ancestor respects the override", async ({
+  page,
+}) => {
+  await page.click("#nested-root[target=frame] #nested-child a[data-turbo-frame]")
+  await nextBeat()
 
-  async "test does not evaluate data-turbo-eval=false scripts"() {
-    this.clickSelector("#eval-false-script-link")
-    await this.nextBeat
-    this.assert.equal(await this.frameScriptEvaluationCount, undefined)
-  }
+  const frameText = await page.textContent("body > h1")
+  assert.equal(frameText, "One")
+  assert.notOk(await hasSelector(page, "#frame"))
+  assert.notOk(await hasSelector(page, "#nested-root"))
+  assert.notOk(await hasSelector(page, "#nested-child"))
+})
 
-  async "test redirecting in a form is still navigatable after redirect"() {
-    await this.nextBeat
-    await this.clickSelector("#navigate-form-redirect")
-    await this.nextBeat
-    this.assert.ok(await this.querySelector("#form-redirect"))
+test("test following a form within a nested frame with form target top", async ({ page }) => {
+  await page.click("#nested-child-navigate-form-top-submit")
+  await nextBeat()
 
-    await this.nextBeat
-    await this.clickSelector("#submit-form")
-    await this.nextBeat
-    this.assert.ok(await this.querySelector("#form-redirected-header"))
+  const frameText = await page.textContent("body > h1")
+  assert.equal(frameText, "One")
+  assert.notOk(await hasSelector(page, "#frame"))
+  assert.notOk(await hasSelector(page, "#nested-root"))
+  assert.notOk(await hasSelector(page, "#nested-child"))
+})
 
-    await this.nextBeat
-    await this.clickSelector("#navigate-form-redirect")
-    await this.nextBeat
-    this.assert.ok(await this.querySelector("#form-redirect-header"))
-  }
+test("test following a form within a nested frame with child frame target top", async ({ page }) => {
+  await page.click("#nested-child-navigate-top-submit")
+  await nextBeat()
 
-  async "test 'turbo:frame-render' is triggered after frame has finished rendering"() {
-    await this.clickSelector("#frame-part")
+  const frameText = await page.textContent("body > h1")
+  assert.equal(frameText, "One")
+  assert.notOk(await hasSelector(page, "#frame"))
+  assert.notOk(await hasSelector(page, "#nested-root"))
+  assert.notOk(await hasSelector(page, "#nested-child-navigate-top"))
+})
 
-    await this.nextEventNamed("turbo:frame-render") // recursive
-    const { fetchResponse } = await this.nextEventNamed("turbo:frame-render")
+test("test following a link within a frame with target=_top navigates the page", async ({ page }) => {
+  assert.equal(await attributeForSelector(page, "#navigate-top", "src"), null)
 
-    this.assert.include(fetchResponse.response.url, "/src/tests/fixtures/frames/part.html")
-  }
+  await page.click("#navigate-top a:not([data-turbo-frame])")
+  await nextBeat()
 
-   async "test following inner link reloads frame on every click"() {
-    await this.clickSelector("#hello a")
-    await this.nextEventNamed("turbo:before-fetch-request")
+  const frameText = await page.textContent("body > h1")
+  assert.equal(frameText, "One")
+  assert.notOk(await hasSelector(page, "#navigate-top a"))
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/one.html")
+  assert.equal(await searchParams(page.url()).get("key"), "value")
+})
 
-    await this.clickSelector("#hello a")
-    await this.nextEventNamed("turbo:before-fetch-request")
-  }
+test("test following a link that declares data-turbo-frame='_self' within a frame with target=_top navigates the frame itself", async ({
+  page,
+}) => {
+  assert.equal(await attributeForSelector(page, "#navigate-top", "src"), null)
 
-  async "test following outer link reloads frame on every click"() {
-    await this.clickSelector("#outer-frame-link")
-    await this.nextEventNamed("turbo:before-fetch-request")
+  await page.click("#navigate-top a[data-turbo-frame='_self']")
+  await nextBeat()
 
-    await this.clickSelector("#outer-frame-link")
-    await this.nextEventNamed("turbo:before-fetch-request")
-  }
+  const title = await page.textContent("body > h1")
+  assert.equal(title, "Frames")
+  assert.ok(await hasSelector(page, "#navigate-top"))
+  const frame = await page.textContent("#navigate-top")
+  assert.equal(frame, "Replaced only the frame")
+})
 
-  async "test following outer form reloads frame on every submit"() {
-    await this.clickSelector("#outer-frame-submit")
-    await this.nextEventNamed("turbo:before-fetch-request")
+test("test following a link to a page with a <turbo-frame recurse> which lazily loads a matching frame", async ({
+  page,
+}) => {
+  await page.click("#recursive summary")
 
-    await this.clickSelector("#outer-frame-submit")
-    await this.nextEventNamed("turbo:before-fetch-request")
-  }
+  assert.ok(await hasSelector(page, "#recursive details[open]"))
 
-  async "test an inner/outer link reloads frame on every click"() {
-    await this.clickSelector("#inner-outer-frame-link")
-    await this.nextEventNamed("turbo:before-fetch-request")
+  await page.click("#recursive a")
+  await nextEventOnTarget(page, "recursive", "turbo:frame-load")
+  await nextEventOnTarget(page, "composer", "turbo:frame-load")
 
-    await this.clickSelector("#inner-outer-frame-link")
-    await this.nextEventNamed("turbo:before-fetch-request")
-  }
+  assert.ok(await hasSelector(page, "#recursive details:not([open])"))
+})
 
-  async "test an inner/outer form reloads frame on every submit"() {
-    await this.clickSelector("#inner-outer-frame-submit")
-    await this.nextEventNamed("turbo:before-fetch-request")
+test("test submitting a form that redirects to a page with a <turbo-frame recurse> which lazily loads a matching frame", async ({
+  page,
+}) => {
+  await page.click("#recursive summary")
 
-    await this.clickSelector("#inner-outer-frame-submit")
-    await this.nextEventNamed("turbo:before-fetch-request")
-  }
+  assert.ok(await hasSelector(page, "#recursive details[open]"))
 
-  async "test reconnecting after following a link does not reload the frame"() {
-    await this.clickSelector("#hello a")
-    await this.nextEventNamed("turbo:before-fetch-request")
+  await page.click("#recursive input[type=submit]")
+  await nextEventOnTarget(page, "recursive", "turbo:frame-load")
+  await nextEventOnTarget(page, "composer", "turbo:frame-load")
 
-    await this.remote.execute(() => {
-      window.savedElement = document.querySelector("#frame")
-      window.savedElement?.remove()
-    })
-    await this.nextBeat
+  assert.ok(await hasSelector(page, "#recursive details:not([open])"))
+})
 
-    await this.remote.execute(() => {
-      if (window.savedElement) {
-        document.body.appendChild(window.savedElement)
+test("test removing [disabled] attribute from eager-loaded frame navigates it", async ({ page }) => {
+  await page.evaluate(() => document.getElementById("frame")?.setAttribute("disabled", ""))
+  await page.evaluate(() =>
+    document.getElementById("frame")?.setAttribute("src", "/src/tests/fixtures/frames/frame.html")
+  )
+
+  assert.ok(
+    await noNextEventOnTarget(page, "frame", "turbo:before-fetch-request"),
+    "[disabled] frames do not submit requests"
+  )
+
+  await page.evaluate(() => document.getElementById("frame")?.removeAttribute("disabled"))
+
+  await nextEventOnTarget(page, "frame", "turbo:before-fetch-request")
+})
+
+test("test evaluates frame script elements on each render", async ({ page }) => {
+  assert.equal(await frameScriptEvaluationCount(page), undefined)
+
+  await page.click("#body-script-link")
+  assert.equal(await frameScriptEvaluationCount(page), 1)
+
+  await page.click("#body-script-link")
+  assert.equal(await frameScriptEvaluationCount(page), 2)
+})
+
+test("test does not evaluate data-turbo-eval=false scripts", async ({ page }) => {
+  await page.click("#eval-false-script-link")
+  await nextBeat()
+  assert.equal(await frameScriptEvaluationCount(page), undefined)
+})
+
+test("test redirecting in a form is still navigatable after redirect", async ({ page }) => {
+  await page.click("#navigate-form-redirect")
+  await nextEventOnTarget(page, "form-redirect", "turbo:frame-load")
+  assert.equal(await page.textContent("turbo-frame#form-redirect h2"), "Form Redirect")
+
+  await page.click("#submit-form")
+  await nextEventOnTarget(page, "form-redirect", "turbo:frame-load")
+  assert.equal(await page.textContent("turbo-frame#form-redirect h2"), "Form Redirected")
+
+  await page.click("#navigate-form-redirect")
+  await nextEventOnTarget(page, "form-redirect", "turbo:frame-load")
+
+  assert.equal(await page.textContent("turbo-frame#form-redirect h2"), "Form Redirect")
+})
+
+test("test 'turbo:frame-render' is triggered after frame has finished rendering", async ({ page }) => {
+  await page.click("#frame-part")
+
+  await nextEventNamed(page, "turbo:frame-render") // recursive
+  const { fetchResponse } = await nextEventNamed(page, "turbo:frame-render")
+
+  assert.include(fetchResponse.response.url, "/src/tests/fixtures/frames/part.html")
+})
+
+test("test navigating a frame fires events", async ({ page }) => {
+  await page.click("#outside-frame-form")
+
+  const { fetchResponse } = await nextEventOnTarget(page, "frame", "turbo:frame-render")
+  assert.include(fetchResponse.response.url, "/src/tests/fixtures/frames/form.html")
+
+  await nextEventOnTarget(page, "frame", "turbo:frame-load")
+
+  const otherEvents = await readEventLogs(page)
+  assert.equal(otherEvents.length, 0, "no more events")
+})
+
+test("test following inner link reloads frame on every click", async ({ page }) => {
+  await page.click("#hello a")
+  await nextEventNamed(page, "turbo:before-fetch-request")
+
+  await page.click("#hello a")
+  await nextEventNamed(page, "turbo:before-fetch-request")
+})
+
+test("test following outer link reloads frame on every click", async ({ page }) => {
+  await page.click("#outer-frame-link")
+  await nextEventNamed(page, "turbo:before-fetch-request")
+
+  await page.click("#outer-frame-link")
+  await nextEventNamed(page, "turbo:before-fetch-request")
+})
+
+test("test following outer form reloads frame on every submit", async ({ page }) => {
+  await page.click("#outer-frame-submit")
+  await nextEventNamed(page, "turbo:before-fetch-request")
+
+  await page.click("#outer-frame-submit")
+  await nextEventNamed(page, "turbo:before-fetch-request")
+})
+
+test("test an inner/outer link reloads frame on every click", async ({ page }) => {
+  await page.click("#inner-outer-frame-link")
+  await nextEventNamed(page, "turbo:before-fetch-request")
+
+  await page.click("#inner-outer-frame-link")
+  await nextEventNamed(page, "turbo:before-fetch-request")
+})
+
+test("test an inner/outer form reloads frame on every submit", async ({ page }) => {
+  await page.click("#inner-outer-frame-submit")
+  await nextEventNamed(page, "turbo:before-fetch-request")
+
+  await page.click("#inner-outer-frame-submit")
+  await nextEventNamed(page, "turbo:before-fetch-request")
+})
+
+test("test reconnecting after following a link does not reload the frame", async ({ page }) => {
+  await page.click("#hello a")
+  await nextEventNamed(page, "turbo:before-fetch-request")
+
+  await page.evaluate(() => {
+    window.savedElement = document.querySelector("#frame")
+    window.savedElement?.remove()
+  })
+  await nextBeat()
+
+  await page.evaluate(() => {
+    if (window.savedElement) {
+      document.body.appendChild(window.savedElement)
+    }
+  })
+  await nextBeat()
+
+  const eventLogs = await readEventLogs(page)
+  const requestLogs = eventLogs.filter(([name]) => name == "turbo:before-fetch-request")
+  assert.equal(requestLogs.length, 0)
+})
+
+test("test navigating pushing URL state from a frame navigation fires events", async ({ page }) => {
+  await page.click("#link-outside-frame-action-advance")
+
+  assert.equal(
+    await nextAttributeMutationNamed(page, "frame", "aria-busy"),
+    "true",
+    "sets aria-busy on the <turbo-frame>"
+  )
+  await nextEventOnTarget(page, "frame", "turbo:before-fetch-request")
+  await nextEventOnTarget(page, "frame", "turbo:before-fetch-response")
+  await nextEventOnTarget(page, "frame", "turbo:frame-render")
+  await nextEventOnTarget(page, "frame", "turbo:frame-load")
+  assert.notOk(await nextAttributeMutationNamed(page, "frame", "aria-busy"), "removes aria-busy from the <turbo-frame>")
+
+  assert.equal(await nextAttributeMutationNamed(page, "html", "aria-busy"), "true", "sets aria-busy on the <html>")
+  await nextEventOnTarget(page, "html", "turbo:before-visit")
+  await nextEventOnTarget(page, "html", "turbo:visit")
+  await nextEventOnTarget(page, "html", "turbo:before-cache")
+  await nextEventOnTarget(page, "html", "turbo:before-render")
+  await nextEventOnTarget(page, "html", "turbo:render")
+  await nextEventOnTarget(page, "html", "turbo:load")
+  assert.notOk(await nextAttributeMutationNamed(page, "html", "aria-busy"), "removes aria-busy from the <html>")
+})
+
+test("test navigating a frame with a form[method=get] that does not redirect still updates the [src]", async ({ page }) => {
+  await page.click("#frame-form-get-no-redirect")
+  await nextEventNamed(page, "turbo:before-fetch-request")
+  await nextEventNamed(page, "turbo:before-fetch-response")
+  await nextEventOnTarget(page, "frame", "turbo:frame-render")
+  await nextEventOnTarget(page, "frame", "turbo:frame-load")
+  await noNextEventNamed(page, "turbo:before-fetch-request")
+
+  const src = (await attributeForSelector(page, "#frame", "src")) ?? ""
+
+  assert.ok(src.includes("/src/tests/fixtures/frames/frame.html"), "updates src attribute")
+  assert.equal(await page.textContent("h1"), "Frames")
+  assert.equal(await page.textContent("#frame h2"), "Frame: Loaded")
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/frames.html")
+})
+
+test("test navigating turbo-frame[data-turbo-action=advance] from within pushes URL state", async ({ page }) => {
+  await page.click("#add-turbo-action-to-frame")
+  await page.click("#link-frame")
+  await nextEventNamed(page, "turbo:load")
+
+  const title = await page.textContent("h1")
+  const frameTitle = await page.textContent("#frame h2")
+
+  assert.equal(title, "Frames")
+  assert.equal(frameTitle, "Frame: Loaded")
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/frames/frame.html")
+})
+
+test("test navigating turbo-frame[data-turbo-action=advance] to the same URL clears the [aria-busy] and [data-turbo-preview] state", async ({
+  page,
+}) => {
+  await page.click("#link-outside-frame-action-advance")
+  await nextEventNamed(page, "turbo:load")
+  await page.click("#link-outside-frame-action-advance")
+  await nextEventNamed(page, "turbo:load")
+  await page.click("#link-outside-frame-action-advance")
+  await nextEventNamed(page, "turbo:load")
+
+  assert.equal(await attributeForSelector(page, "#frame", "aria-busy"), null, "clears turbo-frame[aria-busy]")
+  assert.equal(await attributeForSelector(page, "#html", "aria-busy"), null, "clears html[aria-busy]")
+  assert.equal(await attributeForSelector(page, "#html", "data-turbo-preview"), null, "clears html[aria-busy]")
+})
+
+test("test navigating a turbo-frame with an a[data-turbo-action=advance] preserves page state", async ({ page }) => {
+  await scrollToSelector(page, "#below-the-fold-input")
+  await page.fill("#below-the-fold-input", "a value")
+  await page.click("#below-the-fold-link-frame-action")
+  await nextEventNamed(page, "turbo:load")
+
+  const title = await page.textContent("h1")
+  const frameTitle = await page.textContent("#frame h2")
+  const src = (await attributeForSelector(page, "#frame", "src")) ?? ""
+
+  assert.ok(src.includes("/src/tests/fixtures/frames/frame.html"), "updates src attribute")
+  assert.equal(title, "Frames")
+  assert.equal(frameTitle, "Frame: Loaded")
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/frames/frame.html")
+  assert.equal(await propertyForSelector(page, "#below-the-fold-input", "value"), "a value", "preserves page state")
+
+  const { y } = await scrollPosition(page)
+  assert.notEqual(y, 0, "preserves Y scroll position")
+})
+
+test("test a turbo-frame that has been driven by a[data-turbo-action] can be navigated normally", async ({ page }) => {
+  await page.click("#remove-target-from-hello")
+  await page.click("#link-hello-advance")
+  await nextEventNamed(page, "turbo:load")
+
+  assert.equal(await page.textContent("h1"), "Frames")
+  assert.equal(await page.textContent("#hello h2"), "Hello from a frame")
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/frames/hello.html")
+
+  await page.click("#hello a")
+  await nextEventOnTarget(page, "hello", "turbo:frame-load")
+  await noNextEventNamed(page, "turbo:load")
+
+  assert.equal(await page.textContent("#hello h2"), "Frames: #hello")
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/frames/hello.html")
+})
+
+test("test navigating turbo-frame from within with a[data-turbo-action=advance] pushes URL state", async ({ page }) => {
+  await page.click("#link-nested-frame-action-advance")
+  await nextEventNamed(page, "turbo:load")
+
+  const title = await page.textContent("h1")
+  const frameTitle = await page.textContent("#frame h2")
+  const src = (await attributeForSelector(page, "#frame", "src")) ?? ""
+
+  assert.ok(src.includes("/src/tests/fixtures/frames/frame.html"), "updates src attribute")
+  assert.equal(title, "Frames")
+  assert.equal(frameTitle, "Frame: Loaded")
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/frames/frame.html")
+  assert.ok(await hasSelector(page, "#frame[complete]"), "marks the frame as [complete]")
+})
+
+test("test navigating frame with a[data-turbo-action=advance] pushes URL state", async ({ page }) => {
+  await page.click("#link-outside-frame-action-advance")
+  await nextEventNamed(page, "turbo:load")
+
+  const title = await page.textContent("h1")
+  const frameTitle = await page.textContent("#frame h2")
+  const src = (await attributeForSelector(page, "#frame", "src")) ?? ""
+
+  assert.ok(src.includes("/src/tests/fixtures/frames/frame.html"), "updates src attribute")
+  assert.equal(title, "Frames")
+  assert.equal(frameTitle, "Frame: Loaded")
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/frames/frame.html")
+  assert.ok(await hasSelector(page, "#frame[complete]"), "marks the frame as [complete]")
+})
+
+test("test navigating frame with form[method=get][data-turbo-action=advance] pushes URL state", async ({ page }) => {
+  await page.click("#form-get-frame-action-advance button")
+  await nextEventNamed(page, "turbo:load")
+
+  const title = await page.textContent("h1")
+  const frameTitle = await page.textContent("#frame h2")
+  const src = (await attributeForSelector(page, "#frame", "src")) ?? ""
+
+  assert.ok(src.includes("/src/tests/fixtures/frames/frame.html"), "updates src attribute")
+  assert.equal(title, "Frames")
+  assert.equal(frameTitle, "Frame: Loaded")
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/frames/frame.html")
+  assert.ok(await hasSelector(page, "#frame[complete]"), "marks the frame as [complete]")
+})
+
+test("test navigating frame with form[method=get][data-turbo-action=advance] to the same URL clears the [aria-busy] and [data-turbo-preview] state", async ({
+  page,
+}) => {
+  await page.click("#form-get-frame-action-advance button")
+  await nextEventNamed(page, "turbo:load")
+  await page.click("#form-get-frame-action-advance button")
+  await nextEventNamed(page, "turbo:load")
+  await page.click("#form-get-frame-action-advance button")
+  await nextEventNamed(page, "turbo:load")
+
+  assert.equal(await attributeForSelector(page, "#frame", "aria-busy"), null, "clears turbo-frame[aria-busy]")
+  assert.equal(await attributeForSelector(page, "#html", "aria-busy"), null, "clears html[aria-busy]")
+  assert.equal(await attributeForSelector(page, "#html", "data-turbo-preview"), null, "clears html[aria-busy]")
+})
+
+test("test navigating frame with form[method=post][data-turbo-action=advance] pushes URL state", async ({ page }) => {
+  await page.click("#form-post-frame-action-advance button")
+  await nextEventNamed(page, "turbo:load")
+
+  const title = await page.textContent("h1")
+  const frameTitle = await page.textContent("#frame h2")
+  const src = (await attributeForSelector(page, "#frame", "src")) ?? ""
+
+  assert.ok(src.includes("/src/tests/fixtures/frames/frame.html"), "updates src attribute")
+  assert.equal(title, "Frames")
+  assert.equal(frameTitle, "Frame: Loaded")
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/frames/frame.html")
+  assert.ok(await hasSelector(page, "#frame[complete]"), "marks the frame as [complete]")
+})
+
+test("test navigating frame with form[method=post][data-turbo-action=advance] to the same URL clears the [aria-busy] and [data-turbo-preview] state", async ({
+  page,
+}) => {
+  await page.click("#form-post-frame-action-advance button")
+  await nextEventNamed(page, "turbo:load")
+  await page.click("#form-post-frame-action-advance button")
+  await nextEventNamed(page, "turbo:load")
+  await page.click("#form-post-frame-action-advance button")
+  await nextEventNamed(page, "turbo:load")
+
+  assert.equal(await attributeForSelector(page, "#frame", "aria-busy"), null, "clears turbo-frame[aria-busy]")
+  assert.equal(await attributeForSelector(page, "#html", "aria-busy"), null, "clears html[aria-busy]")
+  assert.equal(await attributeForSelector(page, "#html", "data-turbo-preview"), null, "clears html[aria-busy]")
+  assert.ok(await hasSelector(page, "#frame[complete]"), "marks the frame as [complete]")
+})
+
+test("test navigating frame with button[data-turbo-action=advance] pushes URL state", async ({ page }) => {
+  await page.click("#button-frame-action-advance")
+  await nextEventNamed(page, "turbo:load")
+
+  const title = await page.textContent("h1")
+  const frameTitle = await page.textContent("#frame h2")
+  const src = (await attributeForSelector(page, "#frame", "src")) ?? ""
+
+  assert.ok(src.includes("/src/tests/fixtures/frames/frame.html"), "updates src attribute")
+  assert.equal(title, "Frames")
+  assert.equal(frameTitle, "Frame: Loaded")
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/frames/frame.html")
+  assert.ok(await hasSelector(page, "#frame[complete]"), "marks the frame as [complete]")
+})
+
+test("test navigating back after pushing URL state from a turbo-frame[data-turbo-action=advance] restores the frames previous contents", async ({
+  page,
+}) => {
+  await page.click("#add-turbo-action-to-frame")
+  await page.click("#link-frame")
+  await nextEventNamed(page, "turbo:load")
+  await page.goBack()
+  await nextEventNamed(page, "turbo:load")
+
+  const title = await page.textContent("h1")
+  const frameTitle = await page.textContent("#frame h2")
+  const src = new URL((await attributeForSelector(page, "#frame", "src")) || "")
+
+  assert.equal(title, "Frames")
+  assert.equal(frameTitle, "Frames: #frame")
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/frames.html")
+  assert.equal(src.pathname, "/src/tests/fixtures/frames/frame.html")
+  assert.equal(await propertyForSelector(page, "#frame", "src"), null)
+})
+
+test("test navigating back then forward after pushing URL state from a turbo-frame[data-turbo-action=advance] restores the frames next contents", async ({
+  page,
+}) => {
+  await page.click("#add-turbo-action-to-frame")
+  await page.click("#link-frame")
+  await nextEventNamed(page, "turbo:load")
+  await page.goBack()
+  await nextEventNamed(page, "turbo:load")
+  await page.goForward()
+  await nextEventNamed(page, "turbo:load")
+
+  const title = await page.textContent("h1")
+  const frameTitle = await page.textContent("#frame h2")
+  const src = (await attributeForSelector(page, "#frame", "src")) ?? ""
+
+  assert.ok(src.includes("/src/tests/fixtures/frames/frame.html"), "updates src attribute")
+  assert.equal(title, "Frames")
+  assert.equal(frameTitle, "Frame: Loaded")
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/frames/frame.html")
+  assert.ok(await hasSelector(page, "#frame[complete]"), "marks the frame as [complete]")
+})
+
+test("test turbo:before-fetch-request fires on the frame element", async ({ page }) => {
+  await page.click("#hello a")
+  assert.ok(await nextEventOnTarget(page, "frame", "turbo:before-fetch-request"))
+})
+
+test("test turbo:before-fetch-response fires on the frame element", async ({ page }) => {
+  await page.click("#hello a")
+  assert.ok(await nextEventOnTarget(page, "frame", "turbo:before-fetch-response"))
+})
+
+test("test navigating a eager frame with a link[method=get] that does not fetch eager frame twice", async ({
+  page,
+}) => {
+  await page.click("#link-to-eager-loaded-frame")
+
+  await nextBeat()
+
+  const eventLogs = await readEventLogs(page)
+  const fetchLogs = eventLogs.filter(
+    ([name, options]) =>
+      name == "turbo:before-fetch-request" && options?.url?.includes("/src/tests/fixtures/frames/frame_for_eager.html")
+  )
+  assert.equal(fetchLogs.length, 1)
+
+  const src = (await attributeForSelector(page, "#eager-loaded-frame", "src")) ?? ""
+  assert.ok(src.includes("/src/tests/fixtures/frames/frame_for_eager.html"), "updates src attribute")
+  assert.equal(await page.textContent("h1"), "Eager-loaded frame")
+  assert.equal(await page.textContent("#eager-loaded-frame h2"), "Eager-loaded frame: Loaded")
+  assert.equal(pathname(page.url()), "/src/tests/fixtures/page_with_eager_frame.html")
+})
+
+test("test loading a tbody element",  async ({ page }) => {
+  await page.click("#tbody0 a")
+  await nextBeat()
+
+  assert.equal(await page.textContent("#tbody0 td"), "Table service")
+  assert.equal(await page.textContent("#thead0 th"), "table thead0")
+})
+
+async function withoutChangingEventListenersCount(page: Page, callback: () => Promise<void>) {
+  const name = "eventListenersAttachedToDocument"
+  const setup = () => {
+    return page.evaluate((name: any) => {
+      const context = window as any
+      context[name] = 0
+      context.originals = {
+        addEventListener: document.addEventListener,
+        removeEventListener: document.removeEventListener,
       }
-    })
-    await this.nextBeat
 
-    const eventLogs = await this.eventLogChannel.read()
-    const requestLogs = eventLogs.filter(([name]) => name == "turbo:before-fetch-request")
-    this.assert.equal(requestLogs.length, 0)
+      document.addEventListener = (
+        type: string,
+        listener: EventListenerOrEventListenerObject,
+        options?: boolean | AddEventListenerOptions
+      ) => {
+        context.originals.addEventListener.call(document, type, listener, options)
+        context[name] += 1
+      }
+
+      document.removeEventListener = (
+        type: string,
+        listener: EventListenerOrEventListenerObject,
+        options?: boolean | AddEventListenerOptions
+      ) => {
+        context.originals.removeEventListener.call(document, type, listener, options)
+        context[name] -= 1
+      }
+
+      return context[name] || 0
+    }, name)
   }
 
-  async "test turbo:before-fetch-request fires on the frame element"() {
-    await this.clickSelector("#hello a")
-    this.assert.ok(await this.nextEventOnTarget("frame", "turbo:before-fetch-request"))
+  const teardown = () => {
+    return page.evaluate((name: any) => {
+      const context = window as any
+      const { addEventListener, removeEventListener } = context.originals
+
+      document.addEventListener = addEventListener
+      document.removeEventListener = removeEventListener
+
+      return context[name] || 0
+    }, name)
   }
 
-  async "test turbo:before-fetch-response fires on the frame element"() {
-    await this.clickSelector("#hello a")
-    this.assert.ok(await this.nextEventOnTarget("frame", "turbo:before-fetch-response"))
-  }
+  const originalCount = await setup()
+  await callback()
+  const finalCount = await teardown()
 
-  async "test loading a tbody element"() {
-    await this.clickSelector("#tbody0 a")
-    await this.nextBeat
+  assert.equal(finalCount, originalCount, "expected callback not to leak event listeners")
+}
 
-    const contentsTd = await this.querySelector("#tbody0 td")
-    this.assert.equal(await contentsTd.getVisibleText(), "Table service")
-
-    const contentsTh = await this.querySelector("#thead0 th")
-    this.assert.equal(await contentsTh.getVisibleText(), "table thead0")
-  }
-  
-  get frameScriptEvaluationCount(): Promise<number | undefined> {
-    return this.evaluate(() => window.frameScriptEvaluationCount)
-  }
+function frameScriptEvaluationCount(page: Page): Promise<number | undefined> {
+  return page.evaluate(() => window.frameScriptEvaluationCount)
 }
 
 declare global {
@@ -298,6 +781,3 @@ declare global {
     frameScriptEvaluationCount?: number
   }
 }
-
-
-FrameTests.registerSuite()

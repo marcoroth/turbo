@@ -1,6 +1,12 @@
 import { FetchResponse } from "../http/fetch_response"
+import { Snapshot } from "../core/snapshot"
+import { LinkClickObserverDelegate } from "../observers/link_click_observer"
+import { FormSubmitObserverDelegate } from "../observers/form_submit_observer"
 
-export enum FrameLoadingStyle { eager = "eager", lazy = "lazy" }
+export enum FrameLoadingStyle {
+  eager = "eager",
+  lazy = "lazy",
+}
 
 export interface FrameElement extends HTMLElement {
   isTurboFrameElement: boolean
@@ -9,6 +15,7 @@ export interface FrameElement extends HTMLElement {
   loaded: Promise<FetchResponse | void>
   src: string | null
   disabled: boolean
+  complete: boolean
   loading: string
   isActive: boolean
   autoscroll: boolean
@@ -21,25 +28,30 @@ export namespace FrameElement {
   export let delegateConstructor: new (element: FrameElement) => FrameElementDelegate
 }
 
-export interface FrameElementDelegate {
+export type FrameElementObservedAttribute = keyof FrameElement & ("disabled" | "complete" | "loading" | "src")
+
+export interface FrameElementDelegate extends LinkClickObserverDelegate, FormSubmitObserverDelegate {
   connect(): void
   disconnect(): void
+  completeChanged(): void
   loadingStyleChanged(): void
   sourceURLChanged(): void
   disabledChanged(): void
-  formSubmissionIntercepted(element: HTMLFormElement, submitter?: HTMLElement): void
   loadResponse(response: FetchResponse): void
+  fetchResponseLoaded: (fetchResponse: FetchResponse) => void
+  visitCachedSnapshot: (snapshot: Snapshot) => void
   isLoading: boolean
 }
 
 export function frameElementFactory(Base: new() => HTMLElement) {
   return class extends Base implements FrameElement {
     readonly isTurboFrameElement: boolean = true
-    loaded: Promise<FetchResponse | void> = Promise.resolve()
+    // loaded: Promise<FetchResponse | void> = Promise.resolve()
+    loaded: Promise<void> = Promise.resolve()
     readonly delegate: FrameElementDelegate
 
-    static get observedAttributes() {
-      return ["disabled", "loading", "src"]
+    static get observedAttributes(): FrameElementObservedAttribute[] {
+      return ["disabled", "complete", "loading", "src"]
     }
 
     constructor() {
@@ -58,20 +70,24 @@ export function frameElementFactory(Base: new() => HTMLElement) {
       this.delegate.disconnect()
     }
 
+    reload(): Promise<void> {
+      const { src } = this
+      this.removeAttribute("complete")
+      this.src = null
+      this.src = src
+      return this.loaded
+    }
+
     attributeChangedCallback(name: string) {
       if (name == "loading") {
         this.delegate.loadingStyleChanged()
+      } else if (name == "complete") {
+        this.delegate.completeChanged()
       } else if (name == "src") {
         this.delegate.sourceURLChanged()
       } else {
         this.delegate.disabledChanged()
       }
-    }
-
-    reload() {
-      const { src } = this;
-      this.src = null;
-      this.src = src;
     }
 
     get selector(): string {
@@ -199,8 +215,10 @@ export function frameElementFactory(Base: new() => HTMLElement) {
 
 function frameLoadingStyleFromString(style: string) {
   switch (style.toLowerCase()) {
-    case "lazy":  return FrameLoadingStyle.lazy
-    default:      return FrameLoadingStyle.eager
+    case "lazy":
+      return FrameLoadingStyle.lazy
+    default:
+      return FrameLoadingStyle.eager
   }
 }
 

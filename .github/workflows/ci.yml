@@ -7,21 +7,38 @@ jobs:
 
     runs-on: ubuntu-latest
 
+
     steps:
-    - uses: actions/checkout@v2
-    - uses: actions/setup-node@v2
+    - uses: actions/checkout@v3
+    - uses: actions/setup-node@v3
       with:
-        node-version: '12'
-    - uses: actions/cache@v2
+        node-version: '16'
+    - uses: actions/cache@v3
       with:
         path: node_modules
         key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
 
     - run: yarn install
+    - run: yarn run playwright install --with-deps
     - run: yarn build
 
-    - name: Test
-      run: yarn test
+    - name: Set Chrome Version
+      run: |
+        CHROMEVER="$(chromedriver --version | cut -d' ' -f2)"
+        echo "Actions ChromeDriver is $CHROMEVER"
+        echo "CHROMEVER=${CHROMEVER}" >> $GITHUB_ENV
+
+    - name: Lint
+      run: yarn lint
+
+    - name: Unit Test
+      run: yarn test:unit
+
+    - name: Chrome Test
+      run: yarn test:browser --project=chrome
+
+    - name: Firefox Test
+      run: yarn test:browser --project=firefox
 
     - name: Publish dev build
       run: .github/scripts/publish-dev-build '${{ secrets.DEV_BUILD_GITHUB_TOKEN }}'

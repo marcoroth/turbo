@@ -1,8 +1,9 @@
 import { Visit, VisitOptions } from "../drive/visit"
 import { FormSubmission } from "../drive/form_submission"
+import { ReloadReason } from "./browser_adapter"
 
 export interface Adapter {
-  visitProposedToLocation(location: URL, options?: Partial<VisitOptions>): void
+  visitProposedToLocation(location: URL, options?: Partial<VisitOptions>): Promise<void>
   visitStarted(visit: Visit): void
   visitCompleted(visit: Visit): void
   visitFailed(visit: Visit): void
@@ -13,5 +14,5 @@ export interface Adapter {
   visitRendered(visit: Visit): void
   formSubmissionStarted?(formSubmission: FormSubmission): void
   formSubmissionFinished?(formSubmission: FormSubmission): void
-  pageInvalidated(): void
+  pageInvalidated(reason: ReloadReason): void
 }
