@@ -113,7 +113,7 @@ export class Session
   visit(location: Locatable, options: Partial<VisitOptions> = {}): Promise<void> {
     const frameElement = options.frame ? document.getElementById(options.frame) : null
 
-    if (isTurboFrameElement(frameElement) {
+    if (frameElement instanceof TurboFrameElement && isTurboFrameElement(frameElement)) {
       frameElement.src = location.toString()
       return frameElement.loaded
     } else {
