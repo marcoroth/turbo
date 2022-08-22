@@ -452,7 +452,9 @@ test("test navigating pushing URL state from a frame navigation fires events", a
   assert.notOk(await nextAttributeMutationNamed(page, "html", "aria-busy"), "removes aria-busy from the <html>")
 })
 
-test("test navigating a frame with a form[method=get] that does not redirect still updates the [src]", async ({ page }) => {
+test("test navigating a frame with a form[method=get] that does not redirect still updates the [src]", async ({
+  page
+}) => {
   await page.click("#frame-form-get-no-redirect")
   await nextEventNamed(page, "turbo:before-fetch-request")
   await nextEventNamed(page, "turbo:before-fetch-response")

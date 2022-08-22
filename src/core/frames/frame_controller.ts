@@ -563,7 +563,7 @@ function activateElement(element: Element | null, currentURL?: string | null) {
   if (element) {
     const src = element.getAttribute("src")
     if (src != null && currentURL != null && urlsAreEqual(src, currentURL)) {
-      throw new Error(`Matching <${element.tagName.toLowerCase()} id="${element.id}"> element has a source URL which references itself`)
+      throw new Error(`Matching <${element.localName} id="${element.id}"> element has a source URL which references itself`)
     }
     if (element.ownerDocument !== document) {
       element = document.importNode(element, true)

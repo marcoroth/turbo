@@ -18,7 +18,7 @@ import { clearBusyState, dispatch, markAsBusy } from "../util"
 import { PageView, PageViewDelegate, PageViewRenderOptions } from "./drive/page_view"
 import { Visit, VisitOptions } from "./drive/visit"
 import { PageSnapshot } from "./drive/page_snapshot"
-import { FrameElement, TurboFrameElement } from "../elements/frame_element"
+import { FrameElement, TurboFrameElement, isTurboFrameElement } from "../elements/frame_element"
 import { FrameViewRenderOptions } from "./frames/frame_view"
 import { FetchResponse } from "../http/fetch_response"
 import { Preloader, PreloaderDelegate } from "./drive/preloader"
@@ -113,7 +113,7 @@ export class Session
   visit(location: Locatable, options: Partial<VisitOptions> = {}): Promise<void> {
     const frameElement = options.frame ? document.getElementById(options.frame) : null
 
-    if (frameElement instanceof TurboFrameElement) {
+    if (isTurboFrameElement(frameElement) {
       frameElement.src = location.toString()
       return frameElement.loaded
     } else {
@@ -319,7 +319,7 @@ export class Session
   }
 
   async frameMissing(frame: FrameElement, fetchResponse: FetchResponse): Promise<void> {
-    console.warn(`A matching frame for #${frame.id} was missing from the response, transforming into full-page Visit.`)
+    console.warn(`A matching frame for ${frame.selector}#${frame.id} was missing from the response, transforming into full-page Visit.`)
 
     const responseHTML = await fetchResponse.responseHTML
     const { location, redirected, statusCode } = fetchResponse

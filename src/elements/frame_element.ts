@@ -8,6 +8,21 @@ export enum FrameLoadingStyle {
   lazy = "lazy",
 }
 
+export type FrameElementObservedAttribute = keyof FrameElement & ("disabled" | "complete" | "loading" | "src")
+
+export interface FrameElementDelegate extends LinkClickObserverDelegate, FormSubmitObserverDelegate {
+  connect(): void
+  disconnect(): void
+  completeChanged(): void
+  loadingStyleChanged(): void
+  sourceURLChanged(): void
+  disabledChanged(): void
+  loadResponse(response: FetchResponse): void
+  fetchResponseLoaded: (fetchResponse: FetchResponse) => void
+  visitCachedSnapshot: (snapshot: Snapshot) => void
+  isLoading: boolean
+}
+
 export interface FrameElement extends HTMLElement {
   isTurboFrameElement: boolean
   selector: string
@@ -28,25 +43,10 @@ export namespace FrameElement {
   export let delegateConstructor: new (element: FrameElement) => FrameElementDelegate
 }
 
-export type FrameElementObservedAttribute = keyof FrameElement & ("disabled" | "complete" | "loading" | "src")
-
-export interface FrameElementDelegate extends LinkClickObserverDelegate, FormSubmitObserverDelegate {
-  connect(): void
-  disconnect(): void
-  completeChanged(): void
-  loadingStyleChanged(): void
-  sourceURLChanged(): void
-  disabledChanged(): void
-  loadResponse(response: FetchResponse): void
-  fetchResponseLoaded: (fetchResponse: FetchResponse) => void
-  visitCachedSnapshot: (snapshot: Snapshot) => void
-  isLoading: boolean
-}
-
 export function frameElementFactory(Base: new() => HTMLElement) {
   return class extends Base implements FrameElement {
     readonly isTurboFrameElement: boolean = true
-    // loaded: Promise<FetchResponse | void> = Promise.resolve()
+
     loaded: Promise<void> = Promise.resolve()
     readonly delegate: FrameElementDelegate
 
@@ -88,22 +88,6 @@ export function frameElementFactory(Base: new() => HTMLElement) {
       } else {
         this.delegate.disabledChanged()
       }
-    }
-
-    get selector(): string {
-      if (this.autonomous) {
-        return this.localName
-      } else {
-        return `${this.localName}[is="${this.isValue}"]`
-      }
-    }
-
-    get isValue(): string {
-      return `turbo-frame-${this.localName}`
-    }
-
-    get autonomous(): boolean {
-      return Base === HTMLElement
     }
 
     /**
@@ -209,6 +193,22 @@ export function frameElementFactory(Base: new() => HTMLElement) {
      */
     get isPreview() {
       return this.ownerDocument?.documentElement?.hasAttribute("data-turbo-preview")
+    }
+
+    get selector(): string {
+      if (this.autonomous) {
+        return this.localName
+      } else {
+        return `${this.localName}[is="${this.isValue}"]`
+      }
+    }
+
+    get isValue(): string {
+      return `turbo-frame-${this.localName}`
+    }
+
+    get autonomous(): boolean {
+      return Base === HTMLElement
     }
   }
 }
