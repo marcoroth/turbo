@@ -319,7 +319,9 @@ export class Session
   }
 
   async frameMissing(frame: FrameElement, fetchResponse: FetchResponse): Promise<void> {
-    console.warn(`A matching frame for ${frame.selector}#${frame.id} was missing from the response, transforming into full-page Visit.`)
+    console.warn(
+      `A matching frame for ${frame.selector}#${frame.id} was missing from the response, transforming into full-page Visit.`
+    )
 
     const responseHTML = await fetchResponse.responseHTML
     const { location, redirected, statusCode } = fetchResponse

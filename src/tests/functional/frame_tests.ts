@@ -453,7 +453,7 @@ test("test navigating pushing URL state from a frame navigation fires events", a
 })
 
 test("test navigating a frame with a form[method=get] that does not redirect still updates the [src]", async ({
-  page
+  page,
 }) => {
   await page.click("#frame-form-get-no-redirect")
   await nextEventNamed(page, "turbo:before-fetch-request")
@@ -714,7 +714,7 @@ test("test navigating a eager frame with a link[method=get] that does not fetch 
   assert.equal(pathname(page.url()), "/src/tests/fixtures/page_with_eager_frame.html")
 })
 
-test("test loading a tbody element",  async ({ page }) => {
+test("test loading a tbody element", async ({ page }) => {
   await page.click("#tbody0 a")
   await nextBeat()
 

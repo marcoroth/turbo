@@ -39,11 +39,12 @@ export interface FrameElement extends HTMLElement {
   attributeChangedCallback(name: string): void
 }
 
+// eslint-disable-next-line @typescript-eslint/no-namespace
 export namespace FrameElement {
   export let delegateConstructor: new (element: FrameElement) => FrameElementDelegate
 }
 
-export function frameElementFactory(Base: new() => HTMLElement) {
+export function frameElementFactory(Base: new () => HTMLElement) {
   return class extends Base implements FrameElement {
     readonly isTurboFrameElement: boolean = true
 
