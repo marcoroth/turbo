@@ -39,6 +39,8 @@ export interface FrameElement extends HTMLElement {
   attributeChangedCallback(name: string): void
 }
 
+import { FrameController } from "../core/frames/frame_controller"
+
 // eslint-disable-next-line @typescript-eslint/no-namespace
 export namespace FrameElement {
   export let delegateConstructor: new (element: FrameElement) => FrameElementDelegate
@@ -61,6 +63,8 @@ export namespace FrameElement {
  *   </turbo-frame>
  */
 export function frameElementFactory(Base: new () => HTMLElement) {
+  // FrameElement.delegateConstructor = FrameController
+
   return class extends Base implements FrameElement {
     readonly isTurboFrameElement: boolean = true
 
@@ -73,13 +77,17 @@ export function frameElementFactory(Base: new () => HTMLElement) {
 
     constructor() {
       super()
-      if (!this.autonomous) {
-        this.setAttribute("is", this.isValue)
-      }
-      this.delegate = new FrameElement.delegateConstructor(this)
+      // console.log(this, this.autonomous)
+      // console.log(FrameElement.delegateConstructor)
+      // if (!this.autonomous) {
+      //   this.setAttribute("is", this.isValue)
+      // }
+      //  = FrameController
+      this.delegate = new FrameController(this)
     }
 
     connectedCallback() {
+      console.log("connected", this)
       this.delegate.connect()
     }
 
@@ -213,6 +221,7 @@ export function frameElementFactory(Base: new () => HTMLElement) {
     }
 
     get selector(): string {
+      // console.log("selector", this.autonomous, this.localName)
       if (this.autonomous) {
         return this.localName
       } else {
@@ -221,11 +230,17 @@ export function frameElementFactory(Base: new () => HTMLElement) {
     }
 
     get isValue(): string {
-      return `turbo-frame-${this.localName}`
+      if (this.autonomous) {
+        return this.localName
+      } else {
+        return `turbo-frame-${this.localName}`
+      }
     }
 
     get autonomous(): boolean {
-      return Base === HTMLElement
+      // console.log("autonomous", this.localName, Base, HTMLElement, Base === HTMLElement)
+      // return Base !== HTMLElement
+      return this.localName === 'turbo-frame'
     }
   }
 }

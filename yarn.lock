@@ -612,6 +612,30 @@
     "@typescript-eslint/types" "5.20.0"
     eslint-visitor-keys "^3.0.0"
 
+"@ungap/custom-elements@^1.1.0":
+  version "1.1.0"
+  resolved "https://registry.yarnpkg.com/@ungap/custom-elements/-/custom-elements-1.1.0.tgz#64451d28e1b6d13ff0467a844feec374f01c487c"
+  integrity sha512-jPOtG6F8Wfmu3C+SF6lAglg/GsMGeiQCelikCrARXodcCVbH51GjG1Ga2GfM+WsxmRfnenLaUBLrkdxduHSGOA==
+
+"@webreflection/custom-elements-attributes@^0.1.3":
+  version "0.1.3"
+  resolved "https://registry.yarnpkg.com/@webreflection/custom-elements-attributes/-/custom-elements-attributes-0.1.3.tgz#2644773118d3e16640c37e3b88820399d826dfc6"
+  integrity sha512-JWrS682J6DQBaA9R+Rdgpns4gN2294HItAmXdU7CxHoSd1hXSoxyxUrqdOROiFVjVl91izxqnRHFbi8ogRrjVQ==
+
+"@webreflection/custom-elements-builtin@^0.3.0":
+  version "0.3.0"
+  resolved "https://registry.yarnpkg.com/@webreflection/custom-elements-builtin/-/custom-elements-builtin-0.3.0.tgz#049cc6a619c9bd4896b982aef9715bc8ad1469b8"
+  integrity sha512-X8C+CYjrxTAYonG5PkdYhOUwQiGctKx8GYW+kZ80sNQa17USal16htZ/VEAAadY8PPNz/XdJpbGJjVS3zmHQ/Q==
+  dependencies:
+    "@webreflection/custom-elements-attributes" "^0.1.3"
+    "@webreflection/custom-elements-upgrade" "^0.1.2"
+    qsa-observer "^3.0.1"
+
+"@webreflection/custom-elements-upgrade@^0.1.2":
+  version "0.1.2"
+  resolved "https://registry.yarnpkg.com/@webreflection/custom-elements-upgrade/-/custom-elements-upgrade-0.1.2.tgz#96614e95b13d1e9ff71a9ba92884bc5d2e3fa902"
+  integrity sha512-DYBB8K3uEst7+xLSyqQG71mnd1i/JWAsuf5M4E5DfS+Dp04mQybcXR/YCRqZsyGdcfsAagb+Cr8rZ8bRdIP14A==
+
 accepts@~1.3.8:
   version "1.3.8"
   resolved "https://registry.yarnpkg.com/accepts/-/accepts-1.3.8.tgz#0bf0be125b67014adcb0b0921e62db7bffe16b2e"
@@ -1133,6 +1157,11 @@ electron-to-chromium@^1.4.147:
   version "1.4.161"
   resolved "https://registry.yarnpkg.com/electron-to-chromium/-/electron-to-chromium-1.4.161.tgz#49cb5b35385bfee6cc439d0a04fbba7a7a7f08a1"
   integrity sha512-sTjBRhqh6wFodzZtc5Iu8/R95OkwaPNn7tj/TaDU5nu/5EFiQDtADGAXdR4tJcTEHlYfJpHqigzJqHvPgehP8A==
+
+element-notifier@^1.1.1:
+  version "1.1.2"
+  resolved "https://registry.yarnpkg.com/element-notifier/-/element-notifier-1.1.2.tgz#6d92794024d2a254032faa1a986ca4a454eabf41"
+  integrity sha512-GaXwkw/aZ4ZCsmzTDrlchtFmu3k3mruOUcC04Lk7YCQLMWsBPUONaIzczvW3QxxVkTpu8oq3r+muVuD+01b7fA==
 
 encodeurl@~1.0.2:
   version "1.0.2"
@@ -2201,6 +2230,13 @@ qs@6.9.7:
   version "6.9.7"
   resolved "https://registry.yarnpkg.com/qs/-/qs-6.9.7.tgz#4610846871485e1e048f44ae3b94033f0e675afe"
   integrity sha512-IhMFgUmuNpyRfxA90umL7ByLlgRXu6tIfKPpF5TmcfRLlLCckfP/g3IQmju6jjpu+Hh8rA+2p6A27ZSPOOHdKw==
+
+qsa-observer@^3.0.1:
+  version "3.0.1"
+  resolved "https://registry.yarnpkg.com/qsa-observer/-/qsa-observer-3.0.1.tgz#974039cdbc056fa06467eaf76e55876225d7aa96"
+  integrity sha512-3GV1PfYT7l+cBQfQtrH5Z8ljldQdrqOxdDjfdbGNGVnAD5qGYO1eOp1hAoNpI+xqvcThot54R5JWU7w9Rc7vHg==
+  dependencies:
+    element-notifier "^1.1.1"
 
 queue-microtask@^1.2.2:
   version "1.2.3"

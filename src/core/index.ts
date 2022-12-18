@@ -1,3 +1,5 @@
+// import '@ungap/custom-elements';
+
 import { Adapter } from "./native/adapter"
 import { FormMode, Session } from "./session"
 import { Cache } from "./cache"

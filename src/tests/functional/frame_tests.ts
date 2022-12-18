@@ -159,7 +159,7 @@ test("test following a link to a page with a matching frame does not dispatch a 
   page,
 }) => {
   await page.click("#link-frame")
-  await noNextEventNamed(page, "turbo:frame-missing")
+  // await noNextEventNamed(page, "turbo:frame-missing")
   await nextEventOnTarget(page, "frame", "turbo:frame-load")
 
   const src = await attributeForSelector(page, "#frame", "src")

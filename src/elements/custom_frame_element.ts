@@ -6,6 +6,7 @@ export function defineCustomFrameElement(name: string) {
 
 defineCustomFrameElement("div")
 defineCustomFrameElement("article")
+defineCustomFrameElement("table")
 defineCustomFrameElement("tbody")
 defineCustomFrameElement("header")
 defineCustomFrameElement("footer")
@@ -13,3 +14,4 @@ defineCustomFrameElement("section")
 defineCustomFrameElement("aside")
 defineCustomFrameElement("main")
 defineCustomFrameElement("nav")
+defineCustomFrameElement("p")
