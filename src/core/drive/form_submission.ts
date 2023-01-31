@@ -122,15 +122,21 @@ export class FormSubmission {
   // The submission process
 
   async start() {
+    const formId = this.formElement.id
     const { initialized, requesting } = FormSubmissionState
     const confirmationMessage = getAttribute("data-turbo-confirm", this.submitter, this.formElement)
 
+    let submitter = this.submitter
+
+    if (formId) {
+      const potentialSubmitter = document.querySelector<HTMLElement>(`[data-turbo-form-id="${formId}"]`)
+
+      if (potentialSubmitter) submitter = potentialSubmitter
+    }
+
     if (typeof confirmationMessage === "string") {
-      const answer = await FormSubmission.confirmMethod(
-        confirmationMessage,
-        this.formElement,
-        this.submitter || this.formElement.originalElement
-      )
+      const answer = await FormSubmission.confirmMethod(confirmationMessage, this.formElement, submitter)
+
       if (!answer) {
         return
       }

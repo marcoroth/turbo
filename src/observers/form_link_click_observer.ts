@@ -33,6 +33,10 @@ export class FormLinkClickObserver implements LinkClickObserverDelegate {
   followedLinkToLocation(link: Element, location: URL): void {
     const form = document.createElement("form")
 
+    const formId = `turbo-form-${Date.now()}`
+    form.id = formId
+    link.setAttribute("data-turbo-form-id", formId)
+
     const type = "hidden"
     for (const [name, value] of location.searchParams) {
       form.append(Object.assign(document.createElement("input"), { type, name, value }))
@@ -53,10 +57,7 @@ export class FormLinkClickObserver implements LinkClickObserverDelegate {
     if (turboAction) form.setAttribute("data-turbo-action", turboAction)
 
     const turboConfirm = link.getAttribute("data-turbo-confirm")
-    if (turboConfirm) {
-      form.setAttribute("data-turbo-confirm", turboConfirm)
-      form.originalElement = link
-    }
+    if (turboConfirm) form.setAttribute("data-turbo-confirm", turboConfirm)
 
     const turboStream = link.hasAttribute("data-turbo-stream")
     if (turboStream) form.setAttribute("data-turbo-stream", "")
@@ -64,7 +65,15 @@ export class FormLinkClickObserver implements LinkClickObserverDelegate {
     this.delegate.submittedFormLinkToLocation(link, location, form)
 
     document.body.appendChild(form)
-    form.addEventListener("turbo:submit-end", () => form.remove(), { once: true })
+
+    form.addEventListener(
+      "turbo:submit-end",
+      () => {
+        form.remove()
+        link.removeAttribute("data-turbo-form-id")
+      },
+      { once: true }
+    )
     requestAnimationFrame(() => form.requestSubmit())
   }
 }
