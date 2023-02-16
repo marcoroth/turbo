@@ -1,7 +1,9 @@
 import { Page, test, expect } from "@playwright/test"
 import { assert, Assertion } from "chai"
+
 import {
   attributeForSelector,
+  clearMutationsLogs,
   hasSelector,
   listenForEventOnTarget,
   nextAttributeMutationNamed,
@@ -35,6 +37,10 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/src/tests/fixtures/frames.html")
   await readEventLogs(page)
 })
+
+function reloadFrame(page: Page, id: string) {
+  return page.evaluate(({ id }) => (document.getElementById(id) as any).reload(), { id })
+}
 
 test("test navigating a frame with Turbo.visit", async ({ page }) => {
   const pathname = "/src/tests/fixtures/frames/frame.html"
@@ -138,6 +144,27 @@ test("test submitting a form[data-turbo-frame=_top] does not toggle the frame's 
   assert.ok(
     await noNextAttributeMutationNamed(page, "frame", "aria-busy"),
     "does not toggle [aria-busy=true] on parent frame"
+  )
+})
+
+test("test reloading a frame toggles the [aria-busy=true] attribute", async ({ page }) => {
+  await nextEventOnTarget(page, "with-src", "turbo:frame-load")
+  await clearMutationsLogs(page)
+
+  await reloadFrame(page, "with-src")
+  await nextEventOnTarget(page, "with-src", "turbo:frame-load")
+
+  assert.equal(await nextAttributeMutationNamed(page, "with-src", "busy"), "", "sets [busy] on frame #with-src")
+  assert.equal(
+    await nextAttributeMutationNamed(page, "with-src", "aria-busy"),
+    "true",
+    "sets [aria-busy=true] on frame #with-src"
+  )
+  assert.equal(await nextAttributeMutationNamed(page, "with-src", "busy"), null, "removes [busy] on frame #with-src")
+  assert.equal(
+    await nextAttributeMutationNamed(page, "with-src", "aria-busy"),
+    null,
+    "removes [aria-busy] from on frame #with-src"
   )
 })
 
@@ -513,7 +540,7 @@ test("test navigating a frame targeting _top from an outer link fires events", a
 test("test invoking .reload() re-fetches the frame's content", async ({ page }) => {
   await page.click("#link-frame")
   await nextEventOnTarget(page, "frame", "turbo:frame-load")
-  await page.evaluate(() => (document.getElementById("frame") as any).reload())
+  await reloadFrame(page, "frame")
 
   const dispatchedEvents = await readEventLogs(page)
 
