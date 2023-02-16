@@ -202,11 +202,14 @@ async function readArray<T>(page: Page, identifier: string, length?: number): Pr
 }
 
 async function clearArray(page: Page, identifier: string): Promise<void> {
-  return page.evaluate(({ identifier }) => {
-    if ((window as any)[identifier]) {
-      (window as any)[identifier] = []
-    }
-  }, { identifier })
+  return page.evaluate(
+    ({ identifier }) => {
+      if ((window as any)[identifier]) {
+        ;(window as any)[identifier] = []
+      }
+    },
+    { identifier }
+  )
 }
 
 export function readBodyMutationLogs(page: Page, length?: number): Promise<BodyMutationLog[]> {

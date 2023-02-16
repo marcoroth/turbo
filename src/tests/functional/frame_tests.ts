@@ -168,6 +168,29 @@ test("test reloading a frame toggles the [aria-busy=true] attribute", async ({ p
   )
 })
 
+test("test setting src on a frame toggles the [aria-busy=true] attribute", async ({ page }) => {
+  await nextEventOnTarget(page, "with-src", "turbo:frame-load")
+  await clearMutationsLogs(page)
+
+  await page.evaluate(
+    () => ((document.getElementById("with-src") as any).src = "/src/tests/fixtures/frames/with-src-2.html")
+  )
+  await nextEventOnTarget(page, "with-src", "turbo:frame-load")
+
+  assert.equal(await nextAttributeMutationNamed(page, "with-src", "busy"), "", "sets [busy] on frame #with-src")
+  assert.equal(
+    await nextAttributeMutationNamed(page, "with-src", "aria-busy"),
+    "true",
+    "sets [aria-busy=true] on frame #with-src"
+  )
+  assert.equal(await nextAttributeMutationNamed(page, "with-src", "busy"), null, "removes [busy] on frame #with-src")
+  assert.equal(
+    await nextAttributeMutationNamed(page, "with-src", "aria-busy"),
+    null,
+    "removes [aria-busy] from on frame #with-src"
+  )
+})
+
 test("successfully following a link to a page without a matching frame dispatches a turbo:frame-missing event", async ({
   page,
 }) => {
