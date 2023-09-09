@@ -13,5 +13,5 @@
     "skipLibCheck": true,
     "isolatedModules": true
   },
-  "exclude": [ "dist", "src/tests/fixtures", "playwright.config.ts" ]
+  "exclude": [ "dist", "src/tests/fixtures", "playwright.config.js" ]
 }
